@@ -40,11 +40,13 @@ Similar examples of applications that are using microservices architecture would
     - PostgreSQL as the database
     - RESTful API as communication pattern
     - HTTP timeout to make sure that the server will not an infinite time for a response
+    - Unit testing for the modules 
 - User Interaction Service
     - Python as the programing language
     - Redis to store the chat history
     - WebSocket for real time communication pattern
     - WebSocket Timeout closing the connection is no response is received withing 50 seconds
+     - Unit testing for the modules 
 - Gateway 
     - JavaScript as the programming language (Node.js using Express.js)
  - Service Discovery
