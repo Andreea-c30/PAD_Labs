@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package chat;
+
+//chat service definition
+service Chat {
+    rpc ChatStream(stream MessageRequest) returns (stream MessageResponse);
+    rpc GetStatus(Empty) returns (StatusResponse);
+    rpc GetChatHistory(Empty) returns (ChatHistoryResponse);
+}
+
+//message request
+message MessageRequest {
+    string username = 1;
+    string message = 2;
+}
+
+//message response
+message MessageResponse {
+    string response = 1;
+}
+
+//message for requests with no parameters
+message Empty {}
+
+// status response message
+message StatusResponse {
+    string status = 1; 
+    int32 activeUsers = 2;
+}
+
+// chat history
+message ChatHistoryResponse {
+    repeated string messages = 1; 
+}
