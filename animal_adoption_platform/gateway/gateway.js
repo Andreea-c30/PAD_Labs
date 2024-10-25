@@ -1,182 +1,165 @@
 const express = require('express');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
+const WebSocket = require('ws');
+const axios = require('axios');
+const CircuitBreaker = require('./circuitBreaker');
 
-//loading protobuf files
-const CHAT_PROTO_PATH = './chat.proto';
+const { router: animalPostsRoutes, initAnimalPostsClient, animalPostsProto } = require('./animalPostsRoutes');
+
+const CHAT_WS_URL = 'ws://localhost:6789';
 const ANIMAL_POSTS_PROTO_PATH = './animal_posts.proto';
-
-// loading chat service protobuf
-const chatPackageDef = protoLoader.loadSync(CHAT_PROTO_PATH, {
-    keepCase: true,
-    longs: String,
-    enums: String,
-    defaults: true,
-    oneofs: true
-});
-const chatProto = grpc.loadPackageDefinition(chatPackageDef).chat;
-
-// loading animal posts service protobuf
-const animalPostsPackageDef = protoLoader.loadSync(ANIMAL_POSTS_PROTO_PATH, {
-    keepCase: true,
-    longs: String,
-    enums: String,
-    defaults: true,
-    oneofs: true
-});
-const animalPostsProto = grpc.loadPackageDefinition(animalPostsPackageDef).animal_posts;
-
-// creating gRPC clients for both services
-const chatClient = new chatProto.Chat('localhost:50051', grpc.credentials.createInsecure());
-const animalPostsClient = new animalPostsProto.AnimalPostService('localhost:50052', grpc.credentials.createInsecure());
+const CRITICAL_LOAD_THRESHOLD = 6;
+const FAILURE_THRESHOLD = 3;
+const TIMEOUT = 5000;
 
 const app = express();
-app.use(express.json()); 
+app.use(express.json());
 
+//initialize Circuit Breakers for each service
+const circuitBreakerAnimalService = new CircuitBreaker(FAILURE_THRESHOLD, TIMEOUT);
+const circuitBreakerChatService = new CircuitBreaker(FAILURE_THRESHOLD, TIMEOUT);
 
-
-// routes of the chat service
-
-// Sending a message
-app.post('/chat', (req, res) => {
-    const { username, message } = req.body;
-    const call = chatClient.ChatStream();
-    call.on('data', (response) => {
-        res.status(200).json({ response: response.response });
-    });
-
-    call.on('error', (error) => {
-        res.status(500).json({ error: error.details });
-    });
-
-    call.write({ username, message });
-    call.end();
-});
-
-// get  chat server status
-app.get('/chat/status', (req, res) => {
-    chatClient.GetStatus({}, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        res.status(200).json({ status: response.status });
-    });
-});
-
-// Get chat history
-app.get('/chat/history', (req, res) => {
-    chatClient.GetChatHistory({}, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        res.status(200).json({ messages: response.messages });
-    });
-});
-
-
-//Animal posts routes 
-const cache = {}; 
-
-// Creating an animal post
-app.post('/animal-posts', (req, res) => {
-    const { title, description, location, status, images } = req.body;
-
-    const request = {
-        title,
-        description,
-        location,
-        status,
-        images
-    };
-
-    animalPostsClient.CreateAnimalPost(request, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        // clearing the cache when a new post is created
-        cache['animalPosts'] = null;
-        res.status(200).json({ message: response.message, postId: response.postId });
-    });
-});
-
-// update an animal post
-app.put('/animal-posts/:postId', (req, res) => {
-    const { postId } = req.params;
-    const { title, description, location, status, images } = req.body;
-
-    const request = {
-        postId: Number(postId),
-        title,
-        description,
-        location,
-        status,
-        images
-    };
-
-    animalPostsClient.UpdateAnimalPost(request, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        // clearing the cache when a post is updated
-        cache['animalPosts'] = null; 
-        res.status(200).json({ message: response.message });
-    });
-});
-
-// Get method animal posts
-app.get('/animal-posts', (req, res) => {
-    // checking if data exists in the cache
-    if (cache['animalPosts']) {
-        //return data from cache
-        return res.status(200).json({ 
-            posts: cache['animalPosts'], 
-            source: 'cache' 
-        });
+const alertCriticalLoad = (load, serviceName) => {
+    if (load > CRITICAL_LOAD_THRESHOLD) {
+        console.warn(`ALERTING SYSTEM: ${serviceName} is under critical load: ${load} pings per second.`);
     }
+};
 
-    //gRPC call to get the animal posts from db
-    animalPostsClient.GetAnimals({}, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        //store data in cache for future use
-        cache['animalPosts'] = response.posts;
-        res.status(200).json({ 
-            posts: response.posts, 
-            source: response.source || 'database' 
+const discoverService = async (serviceName) => {
+    try {
+        return await circuitBreakerAnimalService.callService(async () => {
+            const response = await axios.get(`http://localhost:3001/services/${serviceName}`);
+            return response.data.url.replace(/^http:\/\//, '');
         });
-    });
-});
+    } catch (error) {
+        console.error(`Circuit Breaker Alert for ${serviceName}:`, error.message);
+        throw error;
+    }
+};
 
-// delete an animal post by id
-app.delete('/animal-posts/:postId', (req, res) => {
-    const { postId } = req.params;
+const updateServiceLoad = async (serviceName, serviceUrl, load) => {
+    try {
+        await circuitBreakerAnimalService.callService(async () => {
+            await axios.post('http://localhost:3001/services/load', {
+                serviceName,
+                serviceUrl,
+                load,
+            });
+        });
+    } catch (error) {
+        console.error(`Error updating load for ${serviceName} at ${serviceUrl}:`, error.message);
+    }
+};
 
-    const request = {
-        postId: Number(postId)
-    };
+//async function to initialize the gateway
+const startServer = async () => {
+    try {
+        const ANIMAL_SERVICE_URL = await discoverService('AnimalService');
+        initAnimalPostsClient(ANIMAL_SERVICE_URL);
+        app.use('/animal-posts', animalPostsRoutes);
 
-    animalPostsClient.DeleteAnimalPost(request, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        // clearing cache when a post is deleted
-        cache['animalPosts'] = null; 
-        res.status(200).json({ message: response.message });
-    });
-});
+        const wsChatClient = new WebSocket(CHAT_WS_URL);
+        const chatHistory = [];
 
-// check the status of the Animal Posts service
-app.get('/animal-posts/status', (req, res) => {
-    animalPostsClient.CheckStatus({}, (error, response) => {
-        if (error) {
-            return res.status(500).json({ error: error.details });
-        }
-        res.status(200).json({ status: response.status });
-    });
-});
+        setInterval(async () => {
+            try {
+                const load = await getLoadFromGrpcClient(ANIMAL_SERVICE_URL, animalPostsProto);
+                await updateServiceLoad('AnimalService', ANIMAL_SERVICE_URL, load);
+                alertCriticalLoad(load, 'AnimalService');
+            } catch (error) {
+                console.error('Error in service load check:', error.message);
+            }
+        }, 5000);
 
-const PORT = 3000;
-app.listen(PORT, () => {
-    console.log(`Gateway server is running on port ${PORT}`);
-});
+        const getLoadFromGrpcClient = async (serviceUrl, proto) => {
+            return await circuitBreakerAnimalService.callService(() => {
+                return new Promise((resolve, reject) => {
+                    const client = new proto.AnimalPostService(
+                        serviceUrl,
+                        grpc.credentials.createInsecure()
+                    );
+                    client.GetLoad({}, (err, response) => {
+                        if (err) return reject(err);
+                        resolve(response.load);
+                    });
+                });
+            });
+        };
+
+        //chat routes
+        app.post('/chat', async (req, res) => {
+            const { username, message } = req.body;
+            try {
+                await circuitBreakerChatService.callService(() => {
+                    return new Promise((resolve, reject) => {
+                        if (wsChatClient.readyState === WebSocket.OPEN) {
+                            const chatData = JSON.stringify({ username, message });
+                            wsChatClient.send(chatData, (err) => {
+                                if (err) return reject(new Error('Failed to send message'));
+                                resolve();
+                            });
+                        } else {
+                            reject(new Error('WebSocket connection is not open'));
+                        }
+                    });
+                });
+                res.status(200).json({ message: 'Message sent to chat server' });
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        app.get('/chat/history', (req, res) => {
+            if (wsChatClient.readyState === WebSocket.OPEN) {
+                const requestData = JSON.stringify({ action: 'get_history' });
+                wsChatClient.send(requestData, (err) => {
+                    if (err) {
+                        return res.status(500).json({ error: 'Failed to request chat history' });
+                    }
+                    setTimeout(() => {
+                        res.status(200).json({ messages: chatHistory });
+                    }, 100); // Delay for history to be populated
+                });
+            } else {
+                res.status(500).json({ error: 'WebSocket connection is not open' });
+            }
+        });
+
+        app.get('/chat/status', (req, res) => {
+            let wsStatus = '';
+            switch (wsChatClient.readyState) {
+                case WebSocket.CONNECTING:
+                    wsStatus = 'Connecting';
+                    break;
+                case WebSocket.OPEN:
+                    wsStatus = 'Open';
+                    break;
+                case WebSocket.CLOSING:
+                    wsStatus = 'Closing';
+                    break;
+                case WebSocket.CLOSED:
+                    wsStatus = 'Closed';
+                    break;
+                default:
+                    wsStatus = 'Unknown';
+            }
+            res.status(200).json({ websocket_status: wsStatus });
+        });
+
+        //status endpoint for the gateway
+        app.get('/status', (req, res) => {
+            res.status(200).json({ status: 'Gateway is running', timestamp: new Date() });
+        });
+
+        //start the server
+        const PORT = 3000;
+        app.listen(PORT, () => {
+            console.log(`Gateway server is running on port ${PORT}`);
+        });
+    } catch (error) {
+        console.error('Error starting the server:', error.message);
+    }
+};
+
+startServer();
