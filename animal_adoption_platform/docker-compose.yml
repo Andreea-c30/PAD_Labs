@@ -1,0 +1,28 @@
+services:
+  animal_posts_service:
+    build:
+      context: ./animal_posts_service
+      dockerfile: Dockerfile
+    ports:
+      - "50052:50052"
+
+  new_chat:
+    build:
+      context: ./new_chat
+      dockerfile: Dockerfile
+    ports:
+      - "6789:6789"
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+
+  service_discovery:
+    build:
+      context: ./service_discovery
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
