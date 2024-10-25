@@ -9,9 +9,10 @@ service AnimalPostService {
     rpc GetAnimals (Empty) returns (AnimalListResponse);
     rpc DeleteAnimalPost (DeleteAnimalRequest) returns (DeleteAnimalResponse);
     rpc CheckStatus (Empty) returns (StatusResponse);
+    rpc GetLoad(Empty) returns (LoadResponse);
 }
 
-// request messages
+// Request messages
 message CreateAnimalRequest {
     string title = 1;
     string description = 2;
@@ -23,6 +24,7 @@ message CreateAnimalRequest {
 message CreateAnimalResponse {
     int32 postId = 1;
     string message = 2;
+    int32 status_code = 3;
 }
 
 message UpdateAnimalRequest {
@@ -36,6 +38,7 @@ message UpdateAnimalRequest {
 
 message UpdateAnimalResponse {
     string message = 1;
+    int32 status_code = 2;
 }
 
 message DeleteAnimalRequest {
@@ -44,13 +47,15 @@ message DeleteAnimalRequest {
 
 message DeleteAnimalResponse {
     string message = 1;
+    int32 status_code = 2;
 }
 
 message Empty {}
 
 message AnimalListResponse {
     repeated AnimalPost posts = 1;
-    string source = 2;  
+    string source = 2;
+    int32 status_code = 3;
 }
 
 message AnimalPost {
@@ -64,4 +69,11 @@ message AnimalPost {
 
 message StatusResponse {
     string status = 1;
+    int32 status_code = 2;
+}
+
+// The response message for GetLoad
+message LoadResponse {
+    int32 load = 1;
+    int32 status_code = 2;
 }
