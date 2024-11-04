@@ -27,7 +27,7 @@ Similar examples of applications that are using microservices architecture would
     2. Storing chat history in non relational database such as MongoDB
     3. Handles notifications for new messages
 
-    ![alt text](https://github.com/Andreea-c30/PAD_Labs/blob/main/img/updated.jpg?raw=true)
+    ![alt text](https://github.com/Andreea-c30/PAD_Labs/blob/main/img/arhitectura_updated.jpg)
 
 ## Technology Stack and Communication Patterns
 
@@ -43,20 +43,24 @@ Similar examples of applications that are using microservices architecture would
     - Circuit Breaker to prevent chat service disruptions from affecting other services
 - Gateway 
     - JavaScript as the programming language (Node.js using Express.js)
+      
     - Monitoring and Logging integrating ELK for log aggregation and Prometheus + Grafana for performance monitoring
 - Cache service
-      - Redis for consistent hashing and caching
-      - High availability - Redis cluster setup with replica nodes for fault tolerance
+     - Redis for consistent hashing and caching
+     - High availability - Redis cluster setup with replica nodes for fault tolerance
 - Saga Coordinator:
     - To manage multi-service transactions for instance reservation and adoption process
+      
     - To ensure eventual consistency across services
-- ETL Service & Data Warehouse:
-    - Periodically extracts data from SQLite and Redis to a data warehouse for reporting and analytics purposes
+      
 - Monitoring Stack
     - ELK Stack to aggregate logs from all services
+      
+- ETL Service & Data Warehouse:
+    - Periodically extracts data from SQLite and Redis to a data warehouse for reporting and analytics purposes
 ## Design Data Management
 
-Data management will be carried out in separate databases. SQLite will be used for posts related to animals, and Redis will be used to keep chat history.
+Data management will be carried out in separate databases. SQLite will be used for posts related to animals, and MongoDb will be used to keep chat history.
 
 Services will communicate with each other using APIs. Also, for data storage it will be used JSON due to its readability and simplicity.
 
@@ -141,12 +145,6 @@ Services will communicate with each other using APIs. Also, for data storage it 
         "response": "User sent message to the room"
     }
     ```
-- GET Method: /chat/history
-    ```
-    { 
-        "messages": [ "username": "message"]
-    }
-    ```
 
 - GET Method: /chat/history/:roomId
     ```
@@ -169,9 +167,19 @@ Services will communicate with each other using APIs. Also, for data storage it 
     ```
 2 Phase Commits
 The endpoint to handle a transaction that creates data in both services, such as when a new adoption request is created, which involves adding records in both the Animal posts service's database and the Chat History database.
-- POST Method: /adoption-request
+Phase 1: Prepare Phase
+- POST Method: /adoption-request - initiates a 2PC transaction to add an adoption request across Animal Posts Service and Chat Service
   ```
   {
+  "userId": "string",
+  "animalId": "string",
+  "adoptionMessage": "string"
+ }
+  ```
+- POST Method: /prepare-adoption - initiates a 2PC transaction to add an adoption request across Animal Posts Service and Chat Service
+  ```
+  {
+  "transactionId": "transactionId",
   "userId": "string",
   "animalId": "string",
   "adoptionMessage": "string"
@@ -182,6 +190,19 @@ Response :
 {
   "transactionId": "transactionId",
   "status": "prepared"/"failed"
+}
+```
+Phase 2: Commit or Abort Phase
+- POST Method: /commit-adoption - write the data to its database 
+```
+{
+  "transactionId": "transactionId"
+}
+```
+- POST Method: /abort-adoption - rollback if any changes were made
+```
+{
+  "transactionId": "transactionId"
 }
 ```
 If all services return prepared, the transaction can proceed to the commit phase. If any service returns failed, the transaction will be aborted.
