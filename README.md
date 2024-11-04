@@ -174,7 +174,8 @@ Phase 1: Prepare Phase
   "userId": "string",
   "animalId": "string",
   "adoptionMessage": "string"
- }
+  }
+ 
   ```
 - POST Method: /prepare-adoption - initiates a 2PC transaction to add an adoption request across Animal Posts Service and Chat Service
   ```
@@ -183,7 +184,7 @@ Phase 1: Prepare Phase
   "userId": "string",
   "animalId": "string",
   "adoptionMessage": "string"
- }
+  }
   ```
 Response :
 ```
@@ -192,20 +193,28 @@ Response :
   "status": "prepared"/"failed"
 }
 ```
+
 Phase 2: Commit or Abort Phase
-- POST Method: /commit-adoption - write the data to its database 
+
+- POST Method: /commit-adoption - write the data to its database
+
 ```
 {
   "transactionId": "transactionId"
 }
+
 ```
+
 - POST Method: /abort-adoption - rollback if any changes were made
+
 ```
 {
   "transactionId": "transactionId"
 }
 ```
+
 If all services return prepared, the transaction can proceed to the commit phase. If any service returns failed, the transaction will be aborted.
+
 ## Set Up Deployment and Scaling
 
 For scaling and deployment of the project it will be used Containerization with Docker. Each microservice and its dependencies will be packaged in a Docker container to ensure consistency in various environments.
