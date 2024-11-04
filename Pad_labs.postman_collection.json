@@ -1,0 +1,419 @@
+{
+	"info": {
+		"_postman_id": "163e7374-e487-4e7e-a0b9-ec631a1a01ea",
+		"name": "Pad_labs",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "30795054"
+	},
+	"item": [
+		{
+			"name": "http://localhost:3000/status",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \r\n            \"title\": \"Cat\",\r\n            \"description\": \"A lost cat found near in the park\",\r\n            \"location\": \"Valea Trandafirilor park\",\r\n            \"status\": \"Found\",\r\n            \"images\": \"cat_image.png\"\r\n        }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/status",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"status"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "localhost:3000/animal-posts",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \r\n            \"title\": \"Cat\",\r\n            \"description\": \"A lost cat found near in the park\",\r\n            \"location\": \"Valea Trandafirilor park\",\r\n            \"status\": \"Found\",\r\n            \"images\": \"cat_image.png\"\r\n        }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "localhost:3000/animal-posts",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"animal-posts"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "localhost:3000/animal-posts",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "localhost:3000/animal-posts",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"animal-posts"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "localhost:3000/animal-posts/1",
+			"request": {
+				"method": "PUT",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n            \"title\": \"Cat\",\r\n            \"description\": \"A lost cat found near in the park\",\r\n            \"location\": \"Valea Trandafirilor park\",\r\n            \"status\": \"Found\",\r\n            \"images\": \"cat_image.png\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "localhost:3000/animal-posts/1",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"animal-posts",
+						"1"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "localhost:3000/animal-posts/:postId",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "localhost:3000/animal-posts/:postId",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"animal-posts",
+						":postId"
+					],
+					"variable": [
+						{
+							"key": "postId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "localhost:3000/animal-posts/:postId",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "localhost:3000/animal-posts/status",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"animal-posts",
+						"status"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3001/status",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3001/status",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3001",
+					"path": [
+						"status"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3001/services/ChatService",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3001/services/ChatService",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3001",
+					"path": [
+						"services",
+						"ChatService"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3001/services/AnimalService",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3001/services/AnimalService",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3001",
+					"path": [
+						"services",
+						"AnimalService"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/chat/join",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \"username\": \"user2\",\r\n  \"action\": \"join_room\",\r\n  \"room\": \"room1\"\r\n}\r\n",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/chat/join",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"chat",
+						"join"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/chat/message",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n  \"username\": \"user2\",\r\n  \"room\": \"room1\",\r\n  \"message\": \"Your message here\"\r\n}\r\n",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/chat/message",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"chat",
+						"message"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/chat/status",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3000/chat/status",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"chat",
+						"status"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/adoption-request",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": " {\r\n  \"userId\": \"string\",\r\n  \"animalId\": \"string\",\r\n  \"adoptionMessage\": \"string\"\r\n }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/adoption-request",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"adoption-request"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/prepare-adoption",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n  \"transactionId\": \"transactionId\",\r\n  \"userId\": \"string\",\r\n  \"animalId\": \"string\",\r\n  \"adoptionMessage\": \"string\"\r\n }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/prepare-adoption",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"prepare-adoption"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/commit-adoption",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n  \"transactionId\": \"transactionId\"\r\n }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/commit-adoption",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"commit-adoption"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://localhost:3000/abort-adoption",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n  \"transactionId\": \"transactionId\"\r\n }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/abort-adoption",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"abort-adoption"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
