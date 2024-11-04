@@ -35,12 +35,25 @@ Similar examples of applications that are using microservices architecture would
     - Python as the programing language
     - SQLite as the database
     - gRPC as communication pattern
+    - Circuit Breaker to handle API failures gracefully
 - User Interaction Service
     - Python as the programing language
-    - Redis as the database to store chat history
-    - gRPC real time communication pattern
+    - MongoDB as the database to store chat history
+    - Websokets real time communication pattern
+    - Circuit Breaker to prevent chat service disruptions from affecting other services
 - Gateway 
     - JavaScript as the programming language (Node.js using Express.js)
+    - Monitoring and Logging integrating ELK for log aggregation and Prometheus + Grafana for performance monitoring
+- Cache service
+      - Redis for consistent hashing and caching
+      - High availability - Redis cluster setup with replica nodes for fault tolerance
+- Saga Coordinator:
+    - To manage multi-service transactions for instance reservation and adoption process
+    - To ensure eventual consistency across services
+- ETL Service & Data Warehouse:
+    - Periodically extracts data from SQLite and Redis to a data warehouse for reporting and analytics purposes
+- Monitoring Stack
+    - ELK Stack to aggregate logs from all services
 ## Design Data Management
 
 Data management will be carried out in separate databases. SQLite will be used for posts related to animals, and Redis will be used to keep chat history.
@@ -154,18 +167,87 @@ Services will communicate with each other using APIs. Also, for data storage it 
     "status": "Server is running"
     }
     ```
+2 Phase Commits
+The endpoint to handle a transaction that creates data in both services, such as when a new adoption request is created, which involves adding records in both the Animal posts service's database and the Chat History database.
+- POST Method: /adoption-request
+  ```
+  {
+  "userId": "string",
+  "animalId": "string",
+  "adoptionMessage": "string"
+ }
+  ```
+Response :
+```
+{
+  "transactionId": "transactionId",
+  "status": "prepared"/"failed"
+}
+```
+If all services return prepared, the transaction can proceed to the commit phase. If any service returns failed, the transaction will be aborted.
 ## Set Up Deployment and Scaling
 
 For scaling and deployment of the project it will be used Containerization with Docker. Each microservice and its dependencies will be packaged in a Docker container to ensure consistency in various environments.
 
 The first step is to build Dockerfiles for each individual service. 
-Next Docker Images are built using the command:
-```
-docker build [OPTIONS] PATH | URL
-```
 
-Then run the Docker image:
+Then to launch all services with one command it was created a docker-compose.yml:
 ```
-docker run -p 8080:80 sampleapp:v1
+version: '3.8'
+
+services:
+  animal_posts_service:
+    build:
+      context: ./animal_posts_service
+    ports:
+      - "50052:50052"
+    environment:
+      - DATABASE_URL=sqlite:///animal_posts.db
+    volumes:
+      - animal_posts_data:/app/animal_posts.db
+
+  new_chat:
+    build:
+      context: ./new_chat
+    ports:
+      - "6789:6789"
+    depends_on:
+      - service_discovery
+      - mongo
+
+  gateway:
+    build:
+      context: ./gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - SERVICE_DISCOVERY_URL=http://service_discovery:3001
+      - CHAT_SERVICE_URL=ws://new_chat:6789
+    depends_on:
+      - service_discovery
+      - animal_posts_service
+      - new_chat
+
+  service_discovery:
+    build:
+      context: ./service_discovery
+    ports:
+      - "3001:3001"
+
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  animal_posts_data:
+  mongo_data:
+
 ```
-And lastly with the container running,we can access the application
+And it is build using the command:
+```
+docker-compose up --build
+```
+And lastly with the container running ,we can access the application using Postman
