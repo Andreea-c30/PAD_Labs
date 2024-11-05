@@ -44,14 +44,10 @@ Similar examples of applications that are using microservices architecture would
 - Gateway 
     - JavaScript as the programming language (Node.js using Express.js)
       
-    - Monitoring and Logging integrating ELK for log aggregation and Prometheus + Grafana for performance monitoring
+    - Monitoring and Logging integrating ELK for log aggregation
 - Cache service
      - Redis for consistent hashing and caching
      - High availability - Redis cluster setup with replica nodes for fault tolerance
-- Saga Coordinator:
-    - To manage multi-service transactions for instance reservation and adoption process
-      
-    - To ensure eventual consistency across services
       
 - Monitoring Stack
     - ELK Stack to aggregate logs from all services
