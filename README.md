@@ -27,7 +27,7 @@ Similar examples of applications that are using microservices architecture would
     2. Storing chat history in non relational database such as MongoDB
     3. Handles notifications for new messages
 
-    ![alt text](https://github.com/Andreea-c30/PAD_Labs/blob/main/img/arhitectura_updated.jpg)
+    ![alt text](https://github.com/Andreea-c30/PAD_Labs/blob/main/img/arhitectura_updatedv2.jpg)
 
 ## Technology Stack and Communication Patterns
 
