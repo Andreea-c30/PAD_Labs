@@ -1,3 +1,4 @@
 websockets
 pymongo
 requests
+prometheus-flask-exporter
