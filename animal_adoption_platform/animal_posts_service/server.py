@@ -1,3 +1,4 @@
+#animal_posts_service/server.py
 import grpc
 import animal_posts_pb2
 import animal_posts_pb2_grpc
@@ -13,6 +14,7 @@ app = Flask(__name__)
 app.config.from_object('config')
 db.init_app(app)
 # Connect Prometheus
+
 metrics = PrometheusMetrics(app, defaults_prefix=NO_PREFIX)
 metrics.info('app_info', 'Application info', version='1.0.3')
 with app.app_context():
@@ -140,6 +142,71 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
             return animal_posts_pb2.LoadResponse(load=total_posts, status_code=200)
 
         return self.run_with_timeout(load_task, 5)
+    # Two-Phase Commit for updating post status to 'adopted' and sending chat message
+    def TwoPhaseCommitForAdopt(self, request, context):
+        """Two-phase commit process for adopting an animal."""
+        try:
+            # Phase 1: Prepare
+            with app.app_context():
+                # Check if the post exists
+                post = db.session.execute(
+                    animal_posts.select().where(animal_posts.c.id == request.postId)
+                ).fetchone()
+                if not post:
+                    raise Exception("Post not found")
+
+                # Update status to "adopted" (prepare phase)
+                db.session.execute(
+                    animal_posts.update().where(animal_posts.c.id == request.postId).values(status="adopted")
+                )
+                db.session.rollback()  # Rollback to emulate prepare phase
+
+            # Prepare the Chat Service
+            chat_response = requests.post(
+                "http://new_chat:6789/prepare_commit",
+                json={
+                    "username": request.username,
+                    "message": f"Adoption message for post {request.postId}: {request.message}"
+                },
+                timeout=5
+            )
+            if chat_response.status_code != 200:
+                raise Exception("Chat service failed during prepare phase")
+
+            # Phase 2: Commit
+            with app.app_context():
+                db.session.execute(
+                    animal_posts.update().where(animal_posts.c.id == request.postId).values(status="adopted")
+                )
+                db.session.commit()
+
+            # Commit to Chat Service
+            chat_commit_response = requests.post(
+                "http://new_chat:6789/commit",
+                json={
+                    "username": request.username,
+                    "message": f"Adoption message for post {request.postId}: {request.message}"
+                },
+                timeout=5
+            )
+            if chat_commit_response.status_code != 200:
+                raise Exception("Failed to commit to chat service")
+
+            return animal_posts_pb2.GenericResponse(
+                message="Adopt request processed successfully",
+                status_code=200
+            )
+
+        except Exception as e:
+            # Rollback
+            with app.app_context():
+                db.session.rollback()
+            requests.post("http://new_chat:6789/rollback", timeout=5)
+            print(f"Transaction failed: {e}")
+            return animal_posts_pb2.GenericResponse(
+                message=f"Transaction failed: {e}",
+                status_code=500
+            )
 
 # start the gRPC server
 def start_grpc_server():
