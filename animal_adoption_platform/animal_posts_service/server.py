@@ -6,17 +6,21 @@ from flask import Flask
 import time
 import requests
 import concurrent.futures
+from prometheus_flask_exporter import PrometheusMetrics, NO_PREFIX
+import threading
 
 app = Flask(__name__)
 app.config.from_object('config')
 db.init_app(app)
-
+# Connect Prometheus
+metrics = PrometheusMetrics(app, defaults_prefix=NO_PREFIX)
+metrics.info('app_info', 'Application info', version='1.0.3')
 with app.app_context():
     db.create_all()
 
 def register_service(service_name, service_url):
     try:
-        requests.post("http://localhost:3001/register", json={
+        requests.post("http://service_discovery:3001/register", json={
             "serviceName": service_name,
             "serviceUrl": service_url
         })
@@ -30,7 +34,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
             future = executor.submit(task_func, *args, **kwargs)
             try:
                 return future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
+            except concurrent.futures.TimeoutError as e:
                 print("Request timed out")
                 return animal_posts_pb2.CreateAnimalResponse(postId=0, message="Request timed out after 5 seconds", status_code=408)
             except Exception as e:
@@ -39,6 +43,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
 
     # create a new animal post
     def CreateAnimalPost(self, request, context):
+       
         def create_task():
             new_post = {
                 "title": request.title,
@@ -47,9 +52,10 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 "status": request.status,
                 "images": request.images
             }
-            time.sleep(10)
+
             with app.app_context():
                 db.session.execute(animal_posts.insert().values(new_post))
+                #time.sleep(10)
                 db.session.commit()
                 post_id = db.session.execute(animal_posts.select().order_by(animal_posts.c.id.desc())).fetchone()[0]
 
@@ -136,14 +142,22 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
         return self.run_with_timeout(load_task, 5)
 
 # start the gRPC server
-def serve():
-    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=5))
+def start_grpc_server():
+    """Start the gRPC server."""
+    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=3))
     animal_posts_pb2_grpc.add_AnimalPostServiceServicer_to_server(AnimalService(), server)
     server.add_insecure_port('[::]:50052')
-    print("Animal post server is running")
+    print("gRPC server is running on port 50052")
     server.start()
     server.wait_for_termination()
 
 if __name__ == '__main__':
-    register_service("AnimalService", "http://localhost:50052")
-    serve()
+    # Register the service in a service discovery mechanism
+    register_service("AnimalService", "animal_posts_service:50052")
+    
+    # Run the gRPC server in a separate thread
+    grpc_thread = threading.Thread(target=start_grpc_server, daemon=True)
+    grpc_thread.start()
+
+    # Start the Flask app for Prometheus metrics
+    app.run(host="0.0.0.0", port=8000)
