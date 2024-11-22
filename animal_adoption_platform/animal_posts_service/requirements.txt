@@ -3,3 +3,5 @@ grpcio-tools
 Flask
 requests
 SQLAlchemy
+Flask-SQLAlchemy
+prometheus-flask-exporter
