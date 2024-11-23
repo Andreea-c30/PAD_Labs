@@ -8,6 +8,7 @@ service AnimalPostService {
     rpc UpdateAnimalPost (UpdateAnimalRequest) returns (UpdateAnimalResponse);
     rpc GetAnimals (Empty) returns (AnimalListResponse);
     rpc DeleteAnimalPost (DeleteAnimalRequest) returns (DeleteAnimalResponse);
+    rpc AdoptAnimal (AdoptAnimalRequest) returns (AdoptAnimalResponse);
     rpc CheckStatus (Empty) returns (StatusResponse);
     rpc GetLoad(Empty) returns (LoadResponse);
 }
@@ -46,6 +47,16 @@ message DeleteAnimalRequest {
 }
 
 message DeleteAnimalResponse {
+    string message = 1;
+    int32 status_code = 2;
+}
+
+
+message AdoptAnimalRequest {
+    int32 postId = 1;
+}
+
+message AdoptAnimalResponse {
     string message = 1;
     int32 status_code = 2;
 }
