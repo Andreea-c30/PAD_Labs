@@ -41,21 +41,21 @@ const alertCriticalLoad = (load, serviceName) => {
 
 // Retry service calls if they fail
 const retryServiceCall = async (circuitBreaker, serviceCall, serviceName) => {
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    let attempt = 0;
+    while (attempt < 3) {
         try {
             return await circuitBreaker.callService(serviceCall);
         } catch (error) {
+            attempt++;
             console.log(`Attempt ${attempt} failed for ${serviceName}`);
             if (attempt === 3) {
-                console.error(`Service ${serviceName} failed after 3 attempts.`);
                 throw error;
             }
-            await new Promise((res) => setTimeout(res, 1000 * attempt)); // Exponential backoff
         }
     }
 };
 
-
+// Descoperirea serviciului URL cu protecție din circuit breaker
 const discoverService = async (serviceName) => {
     try {
         return await retryServiceCall(circuitBreakerAnimalService, async () => {
@@ -67,56 +67,7 @@ const discoverService = async (serviceName) => {
         throw error;
     }
 };
-// Add a new route for adoption
-app.post('/adopt/:postId', async (req, res) => {
-    const { postId } = req.params;
-    const { username, message } = req.body; // Expecting a message from the user about the adoption
-    
-    try {
-        // call the Animal Post Service to change the status to "adopted"
-        const animalPostResponse = await retryServiceCall(circuitBreakerAnimalService, async () => {
-     
-            const animalPostUrl = await discoverService('AnimalService');
-            const response = await axios.post(`${animalPostUrl}/adopt/${postId}`, {
-                username, 
-                message // You could send additional data here, like "username" or a "message" for adoption
-            });
-            return response.data;
-        }, 'AnimalService');
 
-        // If the Animal Service successfully updated the post to adopted
-        if (animalPostResponse.status_code === 200) {
-            // Then, send a message to the chat service indicating the adoption
-            const chatMessage = `User ${username} has adopted animal post ${postId}.`;
-            const chatData = {
-                username,
-                message: chatMessage,
-                room: 'adopt-room' // Optionally, you can define a special "adopt-room"
-            };
-            // Send this message to the chat service
-            await axios.post('http://new_chat:6789/chat/message', chatData);
-
-            // Send a success response to the client
-            res.status(200).json({
-                message: `Animal post ${postId} has been adopted successfully by ${username}`,
-                status_code: 200
-            });
-        } else {
-            // If Animal Service fails to update the status
-            res.status(500).json({
-                message: `Failed to adopt animal post ${postId}.`,
-                status_code: 500
-            });
-        }
-
-    } catch (error) {
-        console.error(`Error adopting animal post ${postId}:`, error.message);
-        res.status(500).json({
-            message: `An error occurred while trying to adopt animal post ${postId}.`,
-            status_code: 500
-        });
-    }
-});
 // Initialize WebSocket connection to the chat service
 const createWsChatClient = () => {
     const wsChatClient = new WebSocket(CHAT_WS_URL);
@@ -212,6 +163,29 @@ app.post('/chat/message', (req, res) => {
     }
 });
 
+// Endpoint to send a chat message to a specific room
+app.post('/chat/adopt', (req, res) => {
+    const { username, room, message, animal_id } = req.body;
+
+    // Retrieve the stored WebSocket connection for the user
+    const userSocket = userSockets[username];
+
+    if (userSocket && userSocket.readyState === WebSocket.OPEN) {
+        const chatData = JSON.stringify({ username, room, animal_id, action: 'adopt' });
+        
+        // Send the message via the user's WebSocket connection
+        userSocket.send(chatData, (err) => {
+            if (err) {
+                console.error(`Failed to send message for ${username}: ${err.message}`);
+                return res.status(500).json({ error: 'Failed to send message' });
+            }
+            res.status(200).json({ message: 'Adoption sent to chat room' });
+        });
+    } else {
+        console.error(`WebSocket for ${username} is not open or doesn't exist`);
+        res.status(500).json({ error: 'WebSocket connection is not open' });
+    }
+});
 
 // Endpoint to retrieve chat history for a specific room
 app.get('/chat/history/:room', (req, res) => {
