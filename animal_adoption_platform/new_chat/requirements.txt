@@ -2,3 +2,5 @@ websockets
 pymongo
 requests
 prometheus-flask-exporter
+grpcio
+grpcio-tools
