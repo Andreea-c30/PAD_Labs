@@ -9,16 +9,22 @@ import requests
 import concurrent.futures
 from prometheus_flask_exporter import PrometheusMetrics, NO_PREFIX
 import threading
+import redis
+import json
+
+redis_client = redis.Redis(host='redis', port=6379, db=0)
 
 app = Flask(__name__)
 app.config.from_object('config')
 db.init_app(app)
 # Connect Prometheus
 
+
 metrics = PrometheusMetrics(app, defaults_prefix=NO_PREFIX)
 metrics.info('app_info', 'Application info', version='1.0.3')
 with app.app_context():
     db.create_all()
+
 
 def register_service(service_name, service_url):
     try:
@@ -28,6 +34,7 @@ def register_service(service_name, service_url):
         })
     except Exception as e:
         print(f"Failed to register service: {e}")
+
 
 class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
     # run tasks with a timeout
@@ -41,11 +48,11 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 return animal_posts_pb2.CreateAnimalResponse(postId=0, message="Request timed out after 5 seconds", status_code=408)
             except Exception as e:
                 print(f"An error occurred: {e}")
-                return animal_posts_pb2.CreateAnimalResponse(postId=0, message="An error occurred", status_code=500)
+                return animal_posts_pb2.CreateAnimalResponse(postId=0, message=f"An error occurred: {e}", status_code=500)
+
 
     # create a new animal post
     def CreateAnimalPost(self, request, context):
-       
         def create_task():
             new_post = {
                 "title": request.title,
@@ -61,9 +68,11 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 db.session.commit()
                 post_id = db.session.execute(animal_posts.select().order_by(animal_posts.c.id.desc())).fetchone()[0]
 
+            redis_client.set("animals", '')
             return animal_posts_pb2.CreateAnimalResponse(postId=post_id, message="Post created successfully", status_code=200)
 
         return self.run_with_timeout(create_task, 5)
+
 
     # update an existing animal post
     def UpdateAnimalPost(self, request, context):
@@ -85,16 +94,22 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 db.session.execute(animal_posts.update().where(animal_posts.c.id == request.postId).values(updated_post))
                 db.session.commit()
 
+            redis_client.set("animals", '')
             return animal_posts_pb2.UpdateAnimalResponse(message="Post updated successfully", status_code=200)
 
         return self.run_with_timeout(update_task, 5)
 
+
     # retrieve animal posts
     def GetAnimals(self, request, context):
         def get_animals_task():
+            if animals := redis_client.get("animals"):
+                return animal_posts_pb2.AnimalListResponse(posts=map(animal_posts_pb2.AnimalPost, json.loads(animals)), source="Redis")
+
             with app.app_context():
                 posts = db.session.execute(animal_posts.select()).fetchall()
             animals = []
+            animals_data = []
             for post in posts:
                 animal = animal_posts_pb2.AnimalPost(
                     postId=post.id,
@@ -105,10 +120,20 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                     images=post.images
                 )
                 animals.append(animal)
+                animals_data.append(dict(
+                    postId=post.id,
+                    title=post.title,
+                    description=post.description,
+                    location=post.location,
+                    status=post.status,
+                    images=post.images
+                ))
 
+            redis_client.set("animals", json.dumps(animals_data))
             return animal_posts_pb2.AnimalListResponse(posts=animals, source="Database")
 
         return self.run_with_timeout(get_animals_task, 5)
+
 
     # delete animal post
     def DeleteAnimalPost(self, request, context):
@@ -123,9 +148,11 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 db.session.execute(animal_posts.delete().where(animal_posts.c.id == request.postId))
                 db.session.commit()
 
+            redis_client.set("animals", None)
             return animal_posts_pb2.DeleteAnimalResponse(message="Post deleted successfully", status_code=200)
 
         return self.run_with_timeout(delete_task, 5)
+
 
     # check the status of the service
     def CheckStatus(self, request, context):
@@ -134,6 +161,23 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
 
         return self.run_with_timeout(status_task, 5)
 
+    
+    def AdoptAnimal(self, request, context):
+        def _():
+            post = db.session.execute(animal_posts.select().where(animal_posts.c.id == request.postId, animal_posts.c.status == "available")).fetchone()
+            if post is None:
+                context.set_details('Post not found')
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return animal_posts_pb2.DeleteAnimalResponse(message="Post not found", status_code=404)
+            
+            db.session.execute(animal_posts.update().where(animal_posts.c.id == request.postId).values({"status": "unavailable"}))
+            db.session.commit()
+
+            return animal_posts_pb2.AdoptAnimalResponse(status="Animal adopted", status_code=200)
+
+        return self.run_with_timeout(_, 5)
+
+    
     # get load method implementation
     def GetLoad(self, request, context):
         def load_task():
@@ -142,71 +186,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
             return animal_posts_pb2.LoadResponse(load=total_posts, status_code=200)
 
         return self.run_with_timeout(load_task, 5)
-    # Two-Phase Commit for updating post status to 'adopted' and sending chat message
-    def TwoPhaseCommitForAdopt(self, request, context):
-        """Two-phase commit process for adopting an animal."""
-        try:
-            # Phase 1: Prepare
-            with app.app_context():
-                # Check if the post exists
-                post = db.session.execute(
-                    animal_posts.select().where(animal_posts.c.id == request.postId)
-                ).fetchone()
-                if not post:
-                    raise Exception("Post not found")
 
-                # Update status to "adopted" (prepare phase)
-                db.session.execute(
-                    animal_posts.update().where(animal_posts.c.id == request.postId).values(status="adopted")
-                )
-                db.session.rollback()  # Rollback to emulate prepare phase
-
-            # Prepare the Chat Service
-            chat_response = requests.post(
-                "http://new_chat:6789/prepare_commit",
-                json={
-                    "username": request.username,
-                    "message": f"Adoption message for post {request.postId}: {request.message}"
-                },
-                timeout=5
-            )
-            if chat_response.status_code != 200:
-                raise Exception("Chat service failed during prepare phase")
-
-            # Phase 2: Commit
-            with app.app_context():
-                db.session.execute(
-                    animal_posts.update().where(animal_posts.c.id == request.postId).values(status="adopted")
-                )
-                db.session.commit()
-
-            # Commit to Chat Service
-            chat_commit_response = requests.post(
-                "http://new_chat:6789/commit",
-                json={
-                    "username": request.username,
-                    "message": f"Adoption message for post {request.postId}: {request.message}"
-                },
-                timeout=5
-            )
-            if chat_commit_response.status_code != 200:
-                raise Exception("Failed to commit to chat service")
-
-            return animal_posts_pb2.GenericResponse(
-                message="Adopt request processed successfully",
-                status_code=200
-            )
-
-        except Exception as e:
-            # Rollback
-            with app.app_context():
-                db.session.rollback()
-            requests.post("http://new_chat:6789/rollback", timeout=5)
-            print(f"Transaction failed: {e}")
-            return animal_posts_pb2.GenericResponse(
-                message=f"Transaction failed: {e}",
-                status_code=500
-            )
 
 # start the gRPC server
 def start_grpc_server():
@@ -217,6 +197,7 @@ def start_grpc_server():
     print("gRPC server is running on port 50052")
     server.start()
     server.wait_for_termination()
+
 
 if __name__ == '__main__':
     # Register the service in a service discovery mechanism
