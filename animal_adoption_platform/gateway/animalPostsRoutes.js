@@ -106,7 +106,7 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Ștergerea unei postări de animale
+// stergerea unei postări de animale
 router.delete('/:postId', async (req, res) => {
     const { postId } = req.params;
     const request = { postId: Number(postId) };
