@@ -9,13 +9,12 @@ services:
       - "50052"  
       - "8000" # Exposing the port internally but not binding to a host port directly
     environment:
-      - DATABASE_URL=sqlite:///animal_posts.db
+      - DATABASE_URL=postgresql://myuser:mypassword@postgres:5432/mydb
     volumes:
       - animal_posts_data:/app/animal_posts.db
     deploy:
       replicas: 3  # Running 3 replicas of animal_posts_service
-    networks:
-      - app_network
+
 
   gateway:
     image: gateway_image
@@ -31,30 +30,28 @@ services:
       - service_discovery
       - animal_posts_service
       - new_chat  
-    networks:
-      - app_network
+
 
   new_chat:
     build:
       context: ./new_chat
     ports:
-      - "6789:6789"
+      - "6789"
+      - "9100"
     environment:
       - DATABASE_URL=mongodb://mongo:27017/
 
     depends_on:
       - service_discovery
       - mongo
-    networks:
-      - app_network
+
 
   service_discovery:
     build:
       context: ./service_discovery
     ports:
       - "3001:3001"
-    networks:
-      - app_network
+
 
   mongo:
     image: mongo:latest
@@ -62,24 +59,37 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/chat_db.db
-    networks:
-      - app_network
+
+  redis:
+    image: redis:latest  # Use the official Redis image from Docker Hub
+    ports:
+      - "6379:6379"  # Expose port 6379, which is the default Redis port
+  
+  postgres:
+    image: postgres:latest  # Use the official PostgreSQL image from Docker Hub
+    environment:
+      POSTGRES_USER: myuser  # Define a custom user for PostgreSQL
+      POSTGRES_PASSWORD: mypassword  # Define a custom password for PostgreSQL
+      POSTGRES_DB: mydb  # Define the name of the database to be created
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:v2.20.1
     container_name: prometheus
-    ports:
-      - '9090:9090'
     volumes:
-      - prometheus_data:/prometheus
       - ./prometheus:/etc/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
+      - prometheus_data:/prometheus
+    ports:
+      - 9090:9090
     expose:
       - 9090
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:7.1.5
     container_name: grafana
     volumes:
       - grafana_data:/var/lib/grafana
@@ -90,9 +100,7 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_SERVER_HTTP_PORT=3002
     ports:
-      - '3002:3002'
-    depends_on:
-      - prometheus
+      - 3002:3002
     expose:
       - 3002
 
@@ -102,7 +110,9 @@ volumes:
   grafana_data: 
   prometheus_data:
 
+  postgres-data:
+    driver: local
 
 networks:
   app_network:
-    driver: bridge
+
