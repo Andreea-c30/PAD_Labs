@@ -3,4 +3,5 @@ pymongo
 requests
 prometheus-flask-exporter
 grpcio
+redis
 grpcio-tools
