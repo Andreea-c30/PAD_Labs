@@ -2,89 +2,79 @@ syntax = "proto3";
 
 package animal_posts;
 
-// Service definition
 service AnimalPostService {
-    rpc CreateAnimalPost (CreateAnimalRequest) returns (CreateAnimalResponse);
-    rpc UpdateAnimalPost (UpdateAnimalRequest) returns (UpdateAnimalResponse);
-    rpc GetAnimals (Empty) returns (AnimalListResponse);
-    rpc DeleteAnimalPost (DeleteAnimalRequest) returns (DeleteAnimalResponse);
-    rpc AdoptAnimal (AdoptAnimalRequest) returns (AdoptAnimalResponse);
-    rpc CheckStatus (Empty) returns (StatusResponse);
-    rpc GetLoad(Empty) returns (LoadResponse);
+  rpc CreateAnimalPost (CreateAnimalRequest) returns (CreateAnimalResponse);
+  rpc UpdateAnimalPost (UpdateAnimalRequest) returns (UpdateAnimalResponse);
+  rpc GetAnimals (Empty) returns (AnimalListResponse);
+  rpc DeleteAnimalPost (DeleteAnimalRequest) returns (DeleteAnimalResponse);
+  rpc CheckStatus (Empty) returns (StatusResponse);
+  rpc Prepare(TransactionRequest) returns (TransactionResponse);
+  rpc Commit(TransactionRequest) returns (TransactionResponse);
+  rpc Rollback(TransactionRequest) returns (TransactionResponse);
 }
 
-// Request messages
 message CreateAnimalRequest {
-    string title = 1;
-    string description = 2;
-    string location = 3;
-    string status = 4;
-    string images = 5;
+  string title = 1;
+  string description = 2;
+  string location = 3;
+  string status = 4;
+  repeated string images = 5;
 }
 
 message CreateAnimalResponse {
-    int32 postId = 1;
-    string message = 2;
-    int32 status_code = 3;
+  int32 postId = 1;
+  string message = 2;
 }
 
 message UpdateAnimalRequest {
-    int32 postId = 1;
-    string title = 2;
-    string description = 3;
-    string location = 4;
-    string status = 5;
-    string images = 6;
+  int32 postId = 1;
+  string title = 2;
+  string description = 3;
+  string location = 4;
+  string status = 5;
+  repeated string images = 6;
 }
 
 message UpdateAnimalResponse {
-    string message = 1;
-    int32 status_code = 2;
-}
-
-message DeleteAnimalRequest {
-    int32 postId = 1;
-}
-
-message DeleteAnimalResponse {
-    string message = 1;
-    int32 status_code = 2;
-}
-
-
-message AdoptAnimalRequest {
-    int32 postId = 1;
-}
-
-message AdoptAnimalResponse {
-    string message = 1;
-    int32 status_code = 2;
+  string message = 1;
 }
 
 message Empty {}
 
 message AnimalListResponse {
-    repeated AnimalPost posts = 1;
-    string source = 2;
-    int32 status_code = 3;
+  repeated AnimalPost posts = 1;
+  string source = 2;
 }
 
 message AnimalPost {
-    int32 postId = 1;
-    string title = 2;
-    string description = 3;
-    string location = 4;
-    string status = 5;
-    string images = 6;
+  int32 postId = 1;
+  string title = 2;
+  string description = 3;
+  string location = 4;
+  string status = 5;
+  repeated string images = 6;
+}
+
+message DeleteAnimalRequest {
+  int32 postId = 1;
+}
+
+message DeleteAnimalResponse {
+  string message = 1;
 }
 
 message StatusResponse {
-    string status = 1;
-    int32 status_code = 2;
+  string status = 1;
 }
 
-// The response message for GetLoad
-message LoadResponse {
-    int32 load = 1;
-    int32 status_code = 2;
+message TransactionRequest {
+    string transaction_id = 1;
+    string operation = 2; // Operation description (e.g., "adopt animal")
+    string payload = 3;   // JSON payload for operation
+}
+
+message TransactionResponse {
+    string transaction_id = 1;
+    bool success = 2;
+    string message = 3;
 }
