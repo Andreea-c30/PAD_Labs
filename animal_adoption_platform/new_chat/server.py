@@ -7,16 +7,35 @@ import datetime
 import requests
 import json
 import grpc
-from flask import Flask
 from prometheus_flask_exporter import PrometheusMetrics, NO_PREFIX
 import animal_posts_pb2_grpc
 import logging
+from flask import Flask, request
+
 logger = logging.getLogger(__name__)
+from redis import Redis
+
+# Initialize Redis client
+try:
+    redis_client = Redis(host='redis', port=6379)
+    redis_client.ping()  # Test connection
+    print("Successfully connected to Redis.")
+except Exception as e:
+    print(f"Failed to connect to Redis: {e}")
+    redis_client = None
 
 # MongoDB connection
-client = MongoClient("mongodb://mongo:27017/")
-db = client['chat_db']
-messages_collection = db['messages']
+# MongoDB connection
+try:
+    client = MongoClient("mongodb://mongo:27017/")
+    db = client['chat_db']
+    messages_collection = db['messages']
+    # Test connection
+    client.admin.command('ping')
+    print("Successfully connected to MongoDB.")
+except Exception as e:
+    print(f"Failed to connect to MongoDB: {e}")
+
 # Connect Prometheus
 app = Flask(__name__)
 metrics = PrometheusMetrics(app, defaults_prefix=NO_PREFIX)
@@ -109,35 +128,48 @@ async def leave_room(websocket, room_name):
     # Remove the room from client tracking
     client_rooms.pop(websocket, None)
 
-
+import uuid
 async def handle_chat_message(data, websocket, room_name):
-    # Limit concurrent execution
-    async with semaphore:
-        try:
-            # Extract username and message from the received data
-            username = data.get('username')
-            chat_message = data.get('message')
+    try:
+        logger.info(f"Received message data: {data}")
+        message_id = data.get("message_id", str(uuid.uuid4()))  # Generate or use provided ID
+        username = data.get('username')
+        chat_message = data.get('message')
 
-            if username and chat_message:
-                # Log the received message with username
-                print(f"Received message from {username} in {room_name} ({websocket.remote_address}): {chat_message}")
+        if not username or not chat_message:
+            raise ValueError("Both 'username' and 'message' fields are required.")
 
-                # Save the message to MongoDB with room name
-                message_record = {
-                    "username": username,
-                    "message": chat_message,
-                    "room": room_name,
-                    "timestamp": datetime.datetime.utcnow()
-                }
-                messages_collection.insert_one(message_record)
+        # Save message to the database
+        message_record = {
+            "message_id": message_id,
+            "username": username,
+            "message": chat_message,
+            "room": room_name,
+            "timestamp": datetime.datetime.utcnow()
+        }
+        result = messages_collection.insert_one(message_record)
+        logger.info(f"Inserted message with ID: {result.inserted_id} for room {room_name}")
 
-                # Prepare broadcast message for the room
-                broadcast_message = json.dumps({"username": username, "message": chat_message})
+        # Send confirmation back to WebSocket client
+        confirmation_message = {
+            "action": "message_saved",
+            "message_id": message_id,
+            "status": "success"
+        }
+        logger.info(f"Sending confirmation: {confirmation_message}")
+        await websocket.send(json.dumps(confirmation_message))
+    except Exception as e:
+        logger.error(f"Error in handle_chat_message: {e}")
+        error_message = {
+            "action": "message_saved",
+            "message_id": data.get("message_id"),
+            "status": "failure",
+            "error": str(e)
+        }
+        await websocket.send(json.dumps(error_message))
 
-                # Broadcast the message to all connected clients in the room
-                await broadcast_to_room(room_name, broadcast_message)
-        except Exception as e:
-            print(f"Error saving message or sending broadcast: {e}")
+
+
 
 
 async def handle_adopt(data, websocket, room_name):
@@ -218,6 +250,163 @@ from threading import Thread
 @app.route("/metrics")
 def metrics_endpoint():
     return metrics.generate_latest()
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    try:
+        # Ping the MongoDB server
+        client.admin.command('ping')
+        return {"status": "success", "message": "Connected to MongoDB"}, 200
+    except Exception as e:
+        return {"status": "failure", "message": str(e)}, 500
+@app.route("/inspect_messages")
+def inspect_messages():
+    try:
+        messages = list(messages_collection.find({}).limit(10))  # Fetch up to 10 messages
+        return {
+            "count": len(messages),
+            "messages": messages
+        }, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
+@app.route("/add_test_message", methods=["POST"])
+def add_test_message():
+    try:
+        # Create a test message
+        test_message = {
+            "username": "test_user",
+            "message": "This is a test message",
+            "room": "test_room",
+            "timestamp": datetime.datetime.utcnow()
+        }
+        # Insert the message into the database
+        result = messages_collection.insert_one(test_message)
+        return {
+            "status": "success",
+            "message": "Test message added to database",
+            "inserted_id": str(result.inserted_id)
+        }, 201
+    except Exception as e:
+        return {"status": "failure", "message": str(e)}, 500
+
+@app.route("/get_messages/<room_name>", methods=["GET"])
+def get_messages(room_name):
+    try:
+        # Fetch messages for the given room from MongoDB
+        messages = list(messages_collection.find({"room": room_name}).sort("timestamp", 1))
+        formatted_messages = [
+            {
+                "username": message.get("username", ""),
+                "message": message.get("message", ""),
+                "timestamp": message.get("timestamp", "").isoformat()
+            }
+            for message in messages
+        ]
+        return {"status": "success", "messages": formatted_messages}, 200
+    except Exception as e:
+        return {"status": "failure", "error": str(e)}, 500
+
+
+@app.route("/add_message", methods=["POST"])
+def add_message():
+    try:
+        # Parse the JSON payload from the request
+        data = request.json  # Correct the typo from 'requests.json' to 'request.json'
+        if not data:
+            return {"status": "failure", "message": "Invalid or missing JSON data"}, 400
+
+        username = data.get("username")
+        message = data.get("message")
+        room = data.get("room", "lobby")  # Default to 'lobby' if no room is specified
+
+        # Validate required fields
+        if not username or not message:
+            return {"status": "failure", "message": "Missing 'username' or 'message' field"}, 400
+
+        # Create the message record
+        message_record = {
+            "username": username,
+            "message": message,
+            "room": room,
+            "timestamp": datetime.datetime.utcnow()
+        }
+
+        # Insert the message into MongoDB
+        result = messages_collection.insert_one(message_record)
+        return {
+            "status": "success",
+            "message": "Message added to database",
+            "inserted_id": str(result.inserted_id)
+        }, 201
+    except Exception as e:
+        logger.error(f"Error in add_message: {e}")
+        return {"status": "failure", "message": str(e)}, 500
+
+@app.route('/prepare', methods=['POST'])
+def prepare_transaction():
+    try:
+        data = request.json
+        username = data['username']
+        room = data['room']
+        message = data['message']
+
+        # Log the incoming request
+        print(f"Prepare request received: {data}")
+
+        # Validate the room exists
+        if not messages_collection.find_one({"room": room}):
+            return {"status": "not ready", "reason": "Room does not exist"}, 400
+
+        # Lock the room
+        redis_client.set(f"lock:room:{room}", "locked")
+        return {"status": "ready"}, 200
+    except Exception as e:
+        print(f"Error in prepare: {e}")
+        return {"status": "not ready", "reason": str(e)}, 500
+
+
+@app.route('/commit', methods=['POST'])
+def commit_transaction():
+    try:
+        data = request.json
+        username = data['username']
+        room = data['room']
+        message = data['message']
+
+        # Save the message
+        message_record = {
+            "username": username,
+            "message": message,
+            "room": room,
+            "timestamp": datetime.datetime.utcnow()
+        }
+        messages_collection.insert_one(message_record)
+
+        # Release lock
+        redis_client.delete(f"lock:room:{room}")
+        return {"status": "committed"}, 200
+    except Exception as e:
+        return {"status": "failed", "reason": str(e)}, 500
+
+
+@app.route('/rollback', methods=['POST'])
+def rollback_transaction():
+    try:
+        data = request.json
+        room = data.get('room')
+        if not room:
+            return {"status": "failed", "reason": "Missing 'room' parameter"}, 400
+
+        print(f"Rollback request received for room: {room}")
+
+        # Release lock
+        redis_client.delete(f"lock:room:{room}")
+        print(f"Lock released for room: {room}")
+
+        return {"status": "rolled back"}, 200
+    except Exception as e:
+        print(f"Error in rollback: {e}")
+        return {"status": "failed", "reason": str(e)}, 500
 
 
 def start_websocket_server():
