@@ -25,7 +25,8 @@ services:
     environment:
       - SERVICE_DISCOVERY_URL=http://service_discovery:3001
       - CHAT_WS_URL=ws://new_chat:6789 
-      - ANIMAL_SERVICE_URL=http://animal_posts_service:50052 
+      - ANIMAL_SERVICE_URL=http://animal_posts_service:50052
+      - CHAT_API_URL=http://new_chat:9100 
     depends_on:
       - service_discovery
       - animal_posts_service
@@ -39,8 +40,7 @@ services:
       - "6789"
       - "9100"
     environment:
-      - DATABASE_URL=mongodb://mongo:27017/
-
+      - DATABASE_URL=mongodb://mongo:27017/chat_db
     depends_on:
       - service_discovery
       - mongo
@@ -58,7 +58,9 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/chat_db.db
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: chat_db
 
   redis:
     image: redis:latest  # Use the official Redis image from Docker Hub
@@ -115,4 +117,3 @@ volumes:
 
 networks:
   app_network:
-
