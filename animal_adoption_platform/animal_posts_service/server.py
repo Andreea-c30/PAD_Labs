@@ -11,8 +11,16 @@ from prometheus_flask_exporter import PrometheusMetrics, NO_PREFIX
 import threading
 import redis
 import json
+from redis import Redis
 
-redis_client = redis.Redis(host='redis', port=6379, db=0)
+# Initialize Redis client
+try:
+    redis_client = Redis(host='redis', port=6379)
+    redis_client.ping()  # Test connection
+    print("Successfully connected to Redis.")
+except Exception as e:
+    print(f"Failed to connect to Redis: {e}")
+    redis_client = None
 
 app = Flask(__name__)
 app.config.from_object('config')
@@ -187,6 +195,130 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
 
         return self.run_with_timeout(load_task, 5)
 
+    transaction_store = {}
+
+    def Prepare(self, request, context):
+        try:
+            payload = json.loads(request.payload)
+            post_id = payload.get("postId")
+            operation = request.operation
+
+            # Check if the resource is already locked
+            lock_key = f"lock:post:{post_id}"
+            if redis_client.get(lock_key):
+                context.set_code(grpc.StatusCode.ABORTED)
+                return animal_posts_pb2.TransactionResponse(
+                    transaction_id=request.transaction_id,
+                    success=False,
+                    message="Resource is locked for another transaction."
+                )
+
+            # Lock the resource for this transaction
+            redis_client.set(lock_key, "locked", ex=60)  # Lock expires in 60 seconds
+
+            with app.app_context():
+                post = db.session.execute(
+                    animal_posts.select().where(animal_posts.c.id == post_id)
+                ).fetchone()
+                if operation == "adopt" and (not post or post.status != "available"):
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    return animal_posts_pb2.TransactionResponse(
+                        transaction_id=request.transaction_id,
+                        success=False,
+                        message=f"Post {post_id} is not available for adoption."
+                    )
+
+            self.transaction_store[request.transaction_id] = {"state": "prepared", "payload": payload}
+            return animal_posts_pb2.TransactionResponse(
+                transaction_id=request.transaction_id,
+                success=True,
+                message="Prepare phase successful."
+            )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return animal_posts_pb2.TransactionResponse(
+                transaction_id=request.transaction_id,
+                success=False,
+                message=f"Prepare phase failed: {str(e)}"
+            )
+
+
+    def Commit(self, request, context):
+        """
+        Commit phase: Finalize the transaction.
+        """
+        try:
+            transaction = self.transaction_store.get(request.transaction_id)
+            if not transaction or transaction["state"] != "prepared":
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                return animal_posts_pb2.TransactionResponse(
+                    transaction_id=request.transaction_id,
+                    success=False,
+                    message="Transaction not in prepared state."
+                )
+
+            payload = transaction["payload"]
+            post_id = payload.get("postId")
+            operation = request.operation
+
+            # Finalize the transaction (e.g., mark the animal as adopted)
+            with app.app_context():
+                if operation == "adopt":
+                    db.session.execute(
+                        animal_posts.update()
+                        .where(animal_posts.c.id == post_id)
+                        .values({"status": "unavailable"})
+                    )
+                    db.session.commit()
+
+            # Mark the transaction as committed
+            self.transaction_store[request.transaction_id]["state"] = "committed"
+            return animal_posts_pb2.TransactionResponse(
+                transaction_id=request.transaction_id,
+                success=True,
+                message="Commit phase successful."
+            )
+
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return animal_posts_pb2.TransactionResponse(
+                transaction_id=request.transaction_id,
+                success=False,
+                message=f"Commit phase failed: {str(e)}"
+            )
+
+    def Rollback(self, request, context):
+        try:
+            transaction = self.transaction_store.get(request.transaction_id)
+            if not transaction or transaction["state"] != "prepared":
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                return animal_posts_pb2.TransactionResponse(
+                    transaction_id=request.transaction_id,
+                    success=False,
+                    message="Transaction not in prepared state."
+                )
+
+            payload = transaction["payload"]
+            post_id = payload.get("postId")
+            lock_key = f"lock:post:{post_id}"
+
+            # Release the lock
+            redis_client.delete(lock_key)
+
+            # Mark the transaction as rolled back
+            self.transaction_store[request.transaction_id]["state"] = "rolled_back"
+            return animal_posts_pb2.TransactionResponse(
+                transaction_id=request.transaction_id,
+                success=True,
+                message="Rollback phase successful."
+            )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return animal_posts_pb2.TransactionResponse(
+                transaction_id=request.transaction_id,
+                success=False,
+                message=f"Rollback phase failed: {str(e)}"
+            )
 
 # start the gRPC server
 def start_grpc_server():
