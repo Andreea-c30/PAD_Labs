@@ -14,8 +14,6 @@ const instances = [
     'http://animal-post-service-3:50052'
 ];
 
-// Crearea unei instanțe a CircuitBreaker pentru serviciul AnimalPost
-const circuitBreaker = new CircuitBreaker(3, 3500, instances); // 3 erori înainte de a comuta instanțele
 
 // Încărcarea serviciului animal_posts.proto
 const animalPostsPackageDef = protoLoader.loadSync(ANIMAL_POSTS_PROTO_PATH, {
@@ -37,6 +35,11 @@ const initAnimalPostsClient = (serviceUrl) => {
         grpc.credentials.createInsecure()
     );
 };
+const circuitBreaker = new CircuitBreaker(3, 3500, instances);
+circuitBreaker.onInstanceSwitch(initAnimalPostsClient);
+
+// Initialize the first instance
+initAnimalPostsClient(instances[0]);
 
 // Crearea unei postări de animale
 router.post('/', async (req, res) => {
@@ -106,7 +109,7 @@ router.get('/', async (req, res) => {
     }
 });
 
-// stergerea unei postări de animale
+// Ștergerea unei postări de animale
 router.delete('/:postId', async (req, res) => {
     const { postId } = req.params;
     const request = { postId: Number(postId) };
@@ -172,6 +175,81 @@ router.get('/test_failover', async (req, res) => {
     }
 });
 
+// Prepare Phase
+router.post('/an_prepare', async (req, res) => {
+    const { transaction_id, animal_id } = req.body;
+
+    try {
+        // Check if the animal is available for adoption
+        const animal = await circuitBreaker.callService(() => {
+            return new Promise((resolve, reject) => {
+                animalPostsClient.GetAnimal({ postId: animal_id }, (error, response) => {
+                    if (error) return reject(error);
+                    resolve(response);
+                });
+            });
+        });
+
+        if (animal.status !== 'available') {
+            return res.status(400).json({ status: 'not ready', reason: 'Animal is not available' });
+        }
+
+        // Mark the transaction as "prepared"
+        transactionCache[transaction_id] = { state: 'prepared', animal_id };
+
+        res.status(200).json({ status: 'ready' });
+    } catch (error) {
+        res.status(500).json({ status: 'not ready', reason: error.message });
+    }
+});
+
+// Commit Phase
+router.post('/an_commit', async (req, res) => {
+    const { transaction_id } = req.body;
+
+    try {
+        const transaction = transactionCache[transaction_id];
+        if (!transaction || transaction.state !== 'prepared') {
+            return res.status(400).json({ status: 'failed', reason: 'Transaction not in prepared state' });
+        }
+
+        // Commit the transaction 
+        await circuitBreaker.callService(() => {
+            return new Promise((resolve, reject) => {
+                animalPostsClient.UpdateAnimalPost(
+                    { postId: transaction.animal_id, status: 'unavailable' },
+                    (error, response) => {
+                        if (error) return reject(error);
+                        resolve(response);
+                    }
+                );
+            });
+        });
+
+        transactionCache[transaction_id].state = 'committed';
+        res.status(200).json({ status: 'committed' });
+    } catch (error) {
+        res.status(500).json({ status: 'failed', reason: error.message });
+    }
+});
+
+// Rollback Phase
+router.post('/an_rollback', async (req, res) => {
+    const { transaction_id } = req.body;
+
+    try {
+        const transaction = transactionCache[transaction_id];
+        if (!transaction) {
+            return res.status(400).json({ status: 'failed', reason: 'Transaction not found' });
+        }
+
+        // Rollback any changes 
+        delete transactionCache[transaction_id];
+        res.status(200).json({ status: 'rolled back' });
+    } catch (error) {
+        res.status(500).json({ status: 'failed', reason: error.message });
+    }
+});
 
 // Endpoint pentru a genera o eroare 500 pentru testare
 router.get('/post_test', (req, res) => {
