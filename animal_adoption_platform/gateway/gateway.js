@@ -7,11 +7,13 @@ const axios = require('axios');
 const connectPrometheus = require('./prometheus');
 const CircuitBreaker = require('./circuitBreaker');
 
+
 // Import routes and gRPC client initialization
 const { router: animalPostsRoutes, initAnimalPostsClient } = require('./animalPostsRoutes');
 
 // Configuration
 const CHAT_WS_URL = 'ws://new_chat:6789';
+const CHAT_API_URL = 'http://new_chat:9100';
 const CRITICAL_LOAD_THRESHOLD = 60;
 const FAILURE_THRESHOLD = 3;
 const TIMEOUT = 5000;
@@ -19,6 +21,8 @@ const TIMEOUT = 5000;
 // Initialize Express app
 const app = express();
 app.use(express.json());
+app.use('/animal-posts', animalPostsRoutes);
+
 
 connectPrometheus(app); 
 
@@ -41,19 +45,15 @@ const alertCriticalLoad = (load, serviceName) => {
 
 // Retry service calls if they fail
 const retryServiceCall = async (circuitBreaker, serviceCall, serviceName) => {
-    let attempt = 0;
-    while (attempt < 3) {
-        try {
-            return await circuitBreaker.callService(serviceCall);
-        } catch (error) {
-            attempt++;
-            console.log(`Attempt ${attempt} failed for ${serviceName}`);
-            if (attempt === 3) {
-                throw error;
-            }
-        }
+    try {
+        // Apelăm serviciul folosind circuit breaker
+        return await circuitBreaker.callService(serviceCall);
+    } catch (error) {
+        console.error(`RetryServiceCall: All retries failed for ${serviceName}.`, error.message);
+        throw error; // Retrimitem eroarea pentru a gestiona eventual în endpoint
     }
 };
+
 
 // Descoperirea serviciului URL cu protecție din circuit breaker
 const discoverService = async (serviceName) => {
@@ -69,44 +69,57 @@ const discoverService = async (serviceName) => {
 };
 
 // Initialize WebSocket connection to the chat service
+let wsChatClient;
 const createWsChatClient = () => {
-    const wsChatClient = new WebSocket(CHAT_WS_URL);
+    const wsClient = new WebSocket(CHAT_WS_URL);
 
-    wsChatClient.on('open', () => {
+    wsClient.on('open', () => {
         console.log('WebSocket connected');
     });
 
-    wsChatClient.on('message', (data) => {
-        const messageData = JSON.parse(data);
-        if (messageData.action === 'chat_history') {
-            const { room, history } = messageData;
-            if (!chatRooms[room]) {
-                chatRooms[room] = { history: [] };
+    wsClient.on('message', (data) => {
+        try {
+            const messageData = JSON.parse(data);
+
+            if (messageData.action === 'message_saved') {
+                console.log(`Message saved confirmation: ${JSON.stringify(messageData)}`);
+                // Handle message saved confirmation
+            } else if (messageData.system) {
+                console.log(`System message received: ${messageData.system}`);
+                // Optionally broadcast to other clients or handle as needed
+            } else {
+                console.warn(`Unexpected WebSocket message: ${JSON.stringify(messageData)}`);
             }
-            chatRooms[room].history = history; // Store history for the room
-        } else {
-            const { username, message, room } = messageData;
-            if (chatRooms[room]) {
-                chatRooms[room].clients.forEach((client) => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify({ username, message }));
-                    }
-                });
-            }
+        } catch (err) {
+            console.error('Error parsing WebSocket message:', err.message);
         }
     });
 
-    wsChatClient.on('error', (error) => {
+    wsClient.on('error', (error) => {
         console.error(`WebSocket error: ${error.message}`);
     });
 
-    wsChatClient.on('close', () => {
+    wsClient.on('close', () => {
         console.log('WebSocket connection closed, attempting to reconnect...');
-        setTimeout(createWsChatClient, 5000); // Retry connecting after 5 seconds
+        reconnectWebSocket();
     });
 
-    return wsChatClient;
+    wsChatClient = wsClient; // Assign to the global variable
+    return wsClient;
 };
+
+
+// Function to handle WebSocket reconnection
+const reconnectWebSocket = () => {
+    setTimeout(() => {
+        console.log('Reinitializing WebSocket connection...');
+        wsChatClient = createWsChatClient(); // Reinitialize WebSocket client
+    }, 10000); // Retry connecting after 5 seconds
+};
+
+// Initialize WebSocket client
+wsChatClient = createWsChatClient();
+
 
 // Initialize chat rooms and WebSocket clients
 const chatRooms = {}; // Store chat rooms and their participants
@@ -138,54 +151,62 @@ app.post('/chat/join', (req, res) => {
         res.status(400).json({ error: `User ${username} is already connected` });
     }
 });
+// Proxy the chat server health check
+app.get('/chat/health', async (req, res) => {
+    try {
+        const response = await axios.get(`${CHAT_API_URL}/health`);
+        res.status(response.status).json(response.data);
+    } catch (error) {
+        console.error('Error connecting to chat server /health endpoint:', error.message);
+        res.status(500).json({ error: 'Failed to connect to chat server' });
+    }
+});
 
 // Endpoint to send a chat message to a specific room
-app.post('/chat/message', (req, res) => {
+const { v4: uuidv4 } = require('uuid'); // Import UUID generator
+
+app.post('/chat/message', async (req, res) => {
     const { username, room, message } = req.body;
 
-    // Retrieve the stored WebSocket connection for the user
-    const userSocket = userSockets[username];
+    if (!username || !message) {
+        return res.status(400).json({ error: "Missing 'username' or 'message'" });
+    }
 
-    if (userSocket && userSocket.readyState === WebSocket.OPEN) {
-        const chatData = JSON.stringify({ username, room, message, action: 'send_message' });
-        
-        // Send the message via the user's WebSocket connection
-        userSocket.send(chatData, (err) => {
-            if (err) {
-                console.error(`Failed to send message for ${username}: ${err.message}`);
-                return res.status(500).json({ error: 'Failed to send message' });
-            }
-            res.status(200).json({ message: 'Message sent to chat room' });
-        });
-    } else {
-        console.error(`WebSocket for ${username} is not open or doesn't exist`);
-        res.status(500).json({ error: 'WebSocket connection is not open' });
+    try {
+        console.log('Forwarding message to Flask:', { username, room, message });
+        const response = await axios.post(`${CHAT_API_URL}/add_message`, { username, room, message });
+        console.log('Response from Flask:', response.data);
+        res.status(response.status).json(response.data);
+    } catch (error) {
+        console.error('Error from Flask:', error.response?.data || error.message);
+        res.status(500).json({ error: 'Failed to save message' });
     }
 });
+
 
 // Endpoint to send a chat message to a specific room
-app.post('/chat/adopt', (req, res) => {
-    const { username, room, message, animal_id } = req.body;
+// app.post('/chat/adopt', (req, res) => {
+//     const { username, room, message, animal_id } = req.body;
 
-    // Retrieve the stored WebSocket connection for the user
-    const userSocket = userSockets[username];
+//     // Retrieve the stored WebSocket connection for the user
+//     const userSocket = userSockets[username];
 
-    if (userSocket && userSocket.readyState === WebSocket.OPEN) {
-        const chatData = JSON.stringify({ username, room, animal_id, action: 'adopt' });
+//     if (userSocket && userSocket.readyState === WebSocket.OPEN) {
+//         const chatData = JSON.stringify({ username, room, animal_id, action: 'adopt' });
         
-        // Send the message via the user's WebSocket connection
-        userSocket.send(chatData, (err) => {
-            if (err) {
-                console.error(`Failed to send message for ${username}: ${err.message}`);
-                return res.status(500).json({ error: 'Failed to send message' });
-            }
-            res.status(200).json({ message: 'Adoption sent to chat room' });
-        });
-    } else {
-        console.error(`WebSocket for ${username} is not open or doesn't exist`);
-        res.status(500).json({ error: 'WebSocket connection is not open' });
-    }
-});
+//         // Send the message via the user's WebSocket connection
+//         userSocket.send(chatData, (err) => {
+//             if (err) {
+//                 console.error(`Failed to send message for ${username}: ${err.message}`);
+//                 return res.status(500).json({ error: 'Failed to send message' });
+//             }
+//             res.status(200).json({ message: 'Adoption sent to chat room' });
+//         });
+//     } else {
+//         console.error(`WebSocket for ${username} is not open or doesn't exist`);
+//         res.status(500).json({ error: 'WebSocket connection is not open' });
+//     }
+// });
 
 // Endpoint to retrieve chat history for a specific room
 app.get('/chat/history/:room', (req, res) => {
@@ -194,8 +215,13 @@ app.get('/chat/history/:room', (req, res) => {
     res.status(200).json({ history });
 });
 
+
 // Endpoint to check the WebSocket connection status
 app.get('/chat/status', (req, res) => {
+    if (!wsChatClient) {
+        return res.status(500).json({ status: 'WebSocket client is not initialized' });
+    }
+
     const wsStatus = wsChatClient.readyState;
 
     let statusMessage = '';
@@ -223,6 +249,82 @@ app.get('/chat/status', (req, res) => {
 app.get('/status', (req, res) => {
     res.status(200).json({ status: 'Gateway is running', timestamp: new Date() });
 });
+/////////////////////////testing routes
+app.post('/db/test-insert', async (req, res) => {
+    try {
+        const response = await axios.post(`${CHAT_API_URL}/add_test_message`);
+        res.status(response.status).json(response.data);
+    } catch (error) {
+        console.error('Error inserting test message:', error.message);
+        res.status(500).json({ error: 'Failed to insert test message' });
+    }
+});
+app.get('/db/get-messages/:room', async (req, res) => {
+    const { room } = req.params;
+    try {
+        const response = await axios.get(`${CHAT_API_URL}/get_messages/${room}`);
+        res.status(response.status).json(response.data);
+    } catch (error) {
+        console.error('Error retrieving messages:', error.message);
+        res.status(500).json({ error: 'Failed to retrieve messages' });
+    }
+});
+
+app.post('/chat/adopt', async (req, res) => {
+    const { username, room, message, animal_id } = req.body;
+
+    if (!username || !room || !animal_id) {
+        return res.status(400).json({ error: "Missing 'username', 'room', or 'animal_id'" });
+    }
+
+    const transactionId = uuidv4();
+
+    try {
+        // Prepare Phase
+        const chatPrepare = await axios.post(`${CHAT_API_URL}/prepare`, {
+            transaction_id: transactionId, username, room, message
+        });
+        const animalPrepare = await axios.post(`http://localhost:3000/animal-posts/an_prepare`, {
+            transaction_id: transactionId, animal_id
+        });
+
+        if (chatPrepare.data.status !== 'ready' || animalPrepare.data.status !== 'ready') {
+            throw new Error("Prepare phase failed");
+        }
+
+        // Commit Phase
+        await axios.post(`${CHAT_API_URL}/commit`, {
+            transaction_id: transactionId, username, room, message
+        });
+        await axios.post(`http://localhost:3000/animal-posts/an_commit`, {
+            transaction_id: transactionId, animal_id
+        });
+
+        return res.status(200).json({ message: 'Adoption transaction completed successfully' });
+    } catch (error) {
+        // Rollback Phase
+        try {
+            await axios.post(`${CHAT_API_URL}/rollback`, {
+                transaction_id: transactionId,
+                room 
+            });
+        } catch (chatRollbackError) {
+            console.error(`Failed to rollback chat: ${chatRollbackError.message}`);
+        }
+
+        try {
+            await axios.post(`http://localhost:3000/animal-posts/an_rollback`, {
+                transaction_id: transactionId
+            });
+        } catch (animalRollbackError) {
+            console.error(`Failed to rollback animal service: ${animalRollbackError.message}`);
+        }
+
+        return res.status(500).json({ error: 'Transaction failed and rolled back', details: error.message });
+    }
+});
+
+
 
 // Start the gateway server
 const startServer = async () => {
