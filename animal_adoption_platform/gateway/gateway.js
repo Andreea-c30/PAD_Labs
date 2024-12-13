@@ -4,12 +4,14 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 const WebSocket = require('ws');
 const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 const connectPrometheus = require('./prometheus');
 const CircuitBreaker = require('./circuitBreaker');
 
 
 // Import routes and gRPC client initialization
 const { router: animalPostsRoutes, initAnimalPostsClient } = require('./animalPostsRoutes');
+const ANIMAL_POST_SERVICE_URL = 'http://animal_posts_service:50052';
 
 // Configuration
 const CHAT_WS_URL = 'ws://new_chat:6789';
@@ -17,6 +19,20 @@ const CHAT_API_URL = 'http://new_chat:9100';
 const CRITICAL_LOAD_THRESHOLD = 60;
 const FAILURE_THRESHOLD = 3;
 const TIMEOUT = 5000;
+// Load gRPC definitions
+const ANIMAL_POSTS_PROTO_PATH = './animal_posts.proto';
+const packageDefinition = protoLoader.loadSync(ANIMAL_POSTS_PROTO_PATH, {
+    keepCase: true,
+    longs: String,
+    enums: String,
+    defaults: true,
+    oneofs: true,
+});
+const animalPostsProto = grpc.loadPackageDefinition(packageDefinition).animal_posts;
+const animalPostsClient = new animalPostsProto.AnimalPostService(
+    'animal_posts_service:50052',
+    grpc.credentials.createInsecure()
+);
 
 // Initialize Express app
 const app = express();
@@ -163,7 +179,6 @@ app.get('/chat/health', async (req, res) => {
 });
 
 // Endpoint to send a chat message to a specific room
-const { v4: uuidv4 } = require('uuid'); // Import UUID generator
 
 app.post('/chat/message', async (req, res) => {
     const { username, room, message } = req.body;
@@ -184,7 +199,7 @@ app.post('/chat/message', async (req, res) => {
 });
 
 
-// Endpoint to send a chat message to a specific room
+// // Endpoint to send a chat message to a specific room
 // app.post('/chat/adopt', (req, res) => {
 //     const { username, room, message, animal_id } = req.body;
 
@@ -207,14 +222,6 @@ app.post('/chat/message', async (req, res) => {
 //         res.status(500).json({ error: 'WebSocket connection is not open' });
 //     }
 // });
-
-// Endpoint to retrieve chat history for a specific room
-app.get('/chat/history/:room', (req, res) => {
-    const { room } = req.params;
-    const history = chatRooms[room]?.history || []; // Safely access history
-    res.status(200).json({ history });
-});
-
 
 // Endpoint to check the WebSocket connection status
 app.get('/chat/status', (req, res) => {
@@ -271,9 +278,9 @@ app.get('/db/get-messages/:room', async (req, res) => {
 });
 
 app.post('/chat/adopt', async (req, res) => {
-    const { username, room, message, animal_id } = req.body;
+    const { username, room, message,animal_id } = req.body;
 
-    if (!username || !room || !animal_id) {
+    if (!username || !room ||!message|| !animal_id) {
         return res.status(400).json({ error: "Missing 'username', 'room', or 'animal_id'" });
     }
 
@@ -281,49 +288,132 @@ app.post('/chat/adopt', async (req, res) => {
 
     try {
         // Prepare Phase
-        const chatPrepare = await axios.post(`${CHAT_API_URL}/prepare`, {
-            transaction_id: transactionId, username, room, message
-        });
-        const animalPrepare = await axios.post(`http://localhost:3000/animal-posts/an_prepare`, {
-            transaction_id: transactionId, animal_id
+        console.log('Starting prepare phase for transaction:', transactionId);
+
+        // Prepare with animal posts service
+        const animalPrepare = await new Promise((resolve, reject) => {
+            animalPostsClient.Prepare(
+                {
+                    transaction_id: transactionId,
+                    payload: JSON.stringify({ postId: animal_id }),
+                    operation: 'adopt',
+                },
+                (error, response) => {
+                    if (error || !response.success) {
+                        return reject(error || new Error(response.message));
+                    }
+                    resolve(response);
+                }
+            );
         });
 
-        if (chatPrepare.data.status !== 'ready' || animalPrepare.data.status !== 'ready') {
-            throw new Error("Prepare phase failed");
+        console.log('AnimalPostService prepare successful:', animalPrepare);
+
+        // Prepare with chat service
+        const chatPrepare = await axios.post(`${CHAT_API_URL}/prepare`, {
+            transaction_id: transactionId,
+            username,
+            room,
+            action: 'adopt',
+            message,
+            animal_id,
+        });
+
+        if (chatPrepare.data.status !== 'ready') {
+            throw new Error('Chat service prepare failed');
         }
 
+        console.log('ChatService prepare successful:', chatPrepare.data);
+
         // Commit Phase
-        await axios.post(`${CHAT_API_URL}/commit`, {
-            transaction_id: transactionId, username, room, message
-        });
-        await axios.post(`http://localhost:3000/animal-posts/an_commit`, {
-            transaction_id: transactionId, animal_id
+        console.log('Starting commit phase for transaction:', transactionId);
+
+        // Commit with animal posts service
+        const animalCommit = await new Promise((resolve, reject) => {
+            animalPostsClient.Commit(
+                {
+                    transaction_id: transactionId,
+                    operation: 'adopt',
+                },
+                (error, response) => {
+                    if (error || !response.success) {
+                        return reject(error || new Error(response.message));
+                    }
+                    resolve(response);
+                }
+            );
         });
 
+        console.log('AnimalPostService commit successful:', animalCommit);
+
+        // Commit with chat service
+        const chatCommit = await axios.post(`${CHAT_API_URL}/commit`, {
+            transaction_id: transactionId,
+            username,
+            room,
+            message,
+            animal_id,
+        });
+
+        if (chatCommit.data.status !== 'committed') {
+            throw new Error('Chat service commit failed');
+        }
+
+        console.log('ChatService commit successful:', chatCommit.data);
+
+        // Transaction completed successfully
         return res.status(200).json({ message: 'Adoption transaction completed successfully' });
     } catch (error) {
+        console.error('Transaction failed, starting rollback phase for transaction:', transactionId);
+
         // Rollback Phase
+        const rollbackErrors = [];
+
+        // Rollback animal posts service
+        try {
+            // Retry rollback for AnimalPostService
+            await new Promise((resolve, reject) => {
+                animalPostsClient.Rollback(
+                    { transaction_id: transactionId },
+                    (error, response) => {
+                        if (error || !response.success) {
+                            return reject(error || new Error(response.message));
+                        }
+                        resolve(response);
+                    }
+                );
+            });
+        } catch (animalRollbackError) {
+            console.error('Retry failed for AnimalPostService rollback:', animalRollbackError.message);
+        }
+        
+
+        // Rollback chat service
         try {
             await axios.post(`${CHAT_API_URL}/rollback`, {
                 transaction_id: transactionId,
-                room 
+                username,
+                room,
+                message,
+                animal_id,
             });
+            console.log('ChatService rollback successful for transaction:', transactionId);
         } catch (chatRollbackError) {
-            console.error(`Failed to rollback chat: ${chatRollbackError.message}`);
+            console.error('Failed to rollback ChatService:', chatRollbackError.message);
+            rollbackErrors.push('ChatService rollback failed');
         }
 
-        try {
-            await axios.post(`http://localhost:3000/animal-posts/an_rollback`, {
-                transaction_id: transactionId
-            });
-        } catch (animalRollbackError) {
-            console.error(`Failed to rollback animal service: ${animalRollbackError.message}`);
+        if (rollbackErrors.length > 0) {
+            console.error('Rollback encountered issues:', rollbackErrors);
         }
 
-        return res.status(500).json({ error: 'Transaction failed and rolled back', details: error.message });
+        return res.status(500).json({
+            error: 'Transaction failed and rolled back',
+            details: error.message,
+            rollback_errors: rollbackErrors,
+        });
     }
 });
-
 
 
 // Start the gateway server
