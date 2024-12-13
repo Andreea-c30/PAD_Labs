@@ -3,19 +3,43 @@ const express = require('express');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 const CircuitBreaker = require('./circuitBreaker');
+const redis = require('redis');
 
 const router = express.Router();
 const ANIMAL_POSTS_PROTO_PATH = './animal_posts.proto';
 
-// Instanțele serviciului AnimalPost
+// Initialize Redis Client
+const redisClient = redis.createClient({
+    socket: {
+        host: 'redis',
+        port: 6379,
+    },
+});
+
+// Redis Error Handling
+redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+
+// Connect to Redis
+(async () => {
+    try {
+        await redisClient.connect();
+        console.log('Connected to Redis');
+    } catch (err) {
+        console.error('Could not connect to Redis:', err.message);
+    }
+})();
+
+// Service Instances
 const instances = [
     'http://animal-post-service-1:50052',
     'http://animal-post-service-2:50052',
-    'http://animal-post-service-3:50052'
+    'http://animal-post-service-3:50052',
 ];
 
+// Circuit Breaker Setup
+const circuitBreaker = new CircuitBreaker(3, 3500, instances); // 3 errors before switching instances
 
-// Încărcarea serviciului animal_posts.proto
+// Load gRPC Service
 const animalPostsPackageDef = protoLoader.loadSync(ANIMAL_POSTS_PROTO_PATH, {
     keepCase: true,
     longs: String,
@@ -24,27 +48,30 @@ const animalPostsPackageDef = protoLoader.loadSync(ANIMAL_POSTS_PROTO_PATH, {
     oneofs: true,
 });
 const animalPostsProto = grpc.loadPackageDefinition(animalPostsPackageDef).animal_posts;
-
 let animalPostsClient;
-const cache = {};
 
-// Inițializarea clientului gRPC
+// Initialize gRPC Client
 const initAnimalPostsClient = (serviceUrl) => {
     animalPostsClient = new animalPostsProto.AnimalPostService(
         serviceUrl,
         grpc.credentials.createInsecure()
     );
 };
-const circuitBreaker = new CircuitBreaker(3, 3500, instances);
-circuitBreaker.onInstanceSwitch(initAnimalPostsClient);
 
-// Initialize the first instance
-initAnimalPostsClient(instances[0]);
+// Helper to Clear Redis Cache
+const clearRedisCache = async (key) => {
+    try {
+        await redisClient.del(key);
+        console.log(`Cache cleared for key: ${key}`);
+    } catch (err) {
+        console.error(`Failed to clear Redis cache for key ${key}:`, err.message);
+    }
+};
 
-// Crearea unei postări de animale
+// Create Animal Post
 router.post('/', async (req, res) => {
-    const { title, description, location, status, images } = req.body;
-    const request = { title, description, location, status, images };
+    const { title, description, location, status } = req.body;
+    const request = { title, description, location, status };
 
     try {
         const response = await circuitBreaker.callService(() => {
@@ -56,18 +83,20 @@ router.post('/', async (req, res) => {
             });
         });
 
-        cache['animalPosts'] = null; // Golirea cache-ului după creare
+        // Clear Cache After Creating a Post
+        await clearRedisCache('animalPosts');
+
         res.status(200).json({ message: response.message, postId: response.postId });
     } catch (error) {
-        res.status(500).json({ error: error.details || 'Serviciu indisponibil' });
+        res.status(500).json({ error: error.details || 'Service unavailable' });
     }
 });
 
-// Actualizarea unei postări de animale
+// Update Animal Post
 router.put('/:postId', async (req, res) => {
     const { postId } = req.params;
-    const { title, description, location, status, images } = req.body;
-    const request = { postId: Number(postId), title, description, location, status, images };
+    const { title, description, location, status } = req.body;
+    const request = { postId: Number(postId), title, description, location, status };
 
     try {
         const response = await circuitBreaker.callService(() => {
@@ -79,20 +108,27 @@ router.put('/:postId', async (req, res) => {
             });
         });
 
-        cache['animalPosts'] = null; // Golirea cache-ului după actualizare
+        // Clear Cache After Updating a Post
+        await clearRedisCache('animalPosts');
+
         res.status(200).json({ message: response.message });
     } catch (error) {
-        res.status(500).json({ error: error.details || 'Serviciu indisponibil' });
+        res.status(500).json({ error: error.details || 'Service unavailable' });
     }
 });
 
-// Obținerea tuturor postărilor de animale cu cache
+// Fetch All Animal Posts with Cache
 router.get('/', async (req, res) => {
-    if (cache['animalPosts']) {
-        return res.status(200).json({ posts: cache['animalPosts'], source: 'cache' });
-    }
-
     try {
+        // Check Cache
+        const cachedPosts = await redisClient.get('animalPosts');
+        if (cachedPosts) {
+            console.log('Cache hit');
+            return res.status(200).json({ posts: JSON.parse(cachedPosts), source: 'cache' });
+        }
+
+        // Fetch from gRPC Service if Cache Miss
+        console.log('Cache miss, calling gRPC service');
         const response = await circuitBreaker.callService(() => {
             return new Promise((resolve, reject) => {
                 animalPostsClient.GetAnimals({}, (error, response) => {
@@ -102,14 +138,19 @@ router.get('/', async (req, res) => {
             });
         });
 
-        cache['animalPosts'] = response.posts; // Salvarea în cache
-        res.status(200).json({ posts: response.posts, source: response.source || 'database' });
+        // Cache Response
+        await redisClient.set('animalPosts', JSON.stringify(response.posts), {
+            EX: 300, // Expire after 300 seconds (5 minutes)
+        });
+
+        res.status(200).json({ posts: response.posts, source: 'database' });
     } catch (error) {
-        res.status(500).json({ error: error.details || 'Serviciu indisponibil' });
+        console.error('Error in GetAnimals route:', error.message);
+        res.status(500).json({ error: error.details || 'Service unavailable' });
     }
 });
 
-// Ștergerea unei postări de animale
+// Delete Animal Post
 router.delete('/:postId', async (req, res) => {
     const { postId } = req.params;
     const request = { postId: Number(postId) };
@@ -124,30 +165,14 @@ router.delete('/:postId', async (req, res) => {
             });
         });
 
-        cache['animalPosts'] = null; // Golirea cache-ului după ștergere
+        // Clear Cache After Deleting a Post
+        await clearRedisCache('animalPosts');
+
         res.status(200).json({ message: response.message });
     } catch (error) {
-        res.status(500).json({ error: error.details || 'Serviciu indisponibil' });
+        res.status(500).json({ error: error.details || 'Service unavailable' });
     }
 });
-
-// Verificarea stării serviciului AnimalPosts
-router.get('/status', async (req, res) => {
-    try {
-        const response = await circuitBreaker.callService(() => {
-            return new Promise((resolve, reject) => {
-                animalPostsClient.CheckStatus({}, (error, response) => {
-                    if (error) return reject(error);
-                    resolve(response);
-                });
-            });
-        });
-        res.status(200).json({ status: response.status });
-    } catch (error) {
-        res.status(500).json({ error: error.details || 'Serviciu indisponibil' });
-    }
-});
-
 // Endpoint pentru testarea circuit breaker-ului și a instanțelor serviciului
 router.get('/test_failover', async (req, res) => {
     try {
@@ -175,86 +200,22 @@ router.get('/test_failover', async (req, res) => {
     }
 });
 
-// Prepare Phase
-router.post('/an_prepare', async (req, res) => {
-    const { transaction_id, animal_id } = req.body;
 
+// Verificarea stării serviciului AnimalPosts
+router.get('/status', async (req, res) => {
     try {
-        // Check if the animal is available for adoption
-        const animal = await circuitBreaker.callService(() => {
+        const response = await circuitBreaker.callService(() => {
             return new Promise((resolve, reject) => {
-                animalPostsClient.GetAnimal({ postId: animal_id }, (error, response) => {
+                animalPostsClient.CheckStatus({}, (error, response) => {
                     if (error) return reject(error);
                     resolve(response);
                 });
             });
         });
-
-        if (animal.status !== 'available') {
-            return res.status(400).json({ status: 'not ready', reason: 'Animal is not available' });
-        }
-
-        // Mark the transaction as "prepared"
-        transactionCache[transaction_id] = { state: 'prepared', animal_id };
-
-        res.status(200).json({ status: 'ready' });
+        res.status(200).json({ status: response.status });
     } catch (error) {
-        res.status(500).json({ status: 'not ready', reason: error.message });
+        res.status(500).json({ error: error.details || 'Serviciu indisponibil' });
     }
-});
-
-// Commit Phase
-router.post('/an_commit', async (req, res) => {
-    const { transaction_id } = req.body;
-
-    try {
-        const transaction = transactionCache[transaction_id];
-        if (!transaction || transaction.state !== 'prepared') {
-            return res.status(400).json({ status: 'failed', reason: 'Transaction not in prepared state' });
-        }
-
-        // Commit the transaction 
-        await circuitBreaker.callService(() => {
-            return new Promise((resolve, reject) => {
-                animalPostsClient.UpdateAnimalPost(
-                    { postId: transaction.animal_id, status: 'unavailable' },
-                    (error, response) => {
-                        if (error) return reject(error);
-                        resolve(response);
-                    }
-                );
-            });
-        });
-
-        transactionCache[transaction_id].state = 'committed';
-        res.status(200).json({ status: 'committed' });
-    } catch (error) {
-        res.status(500).json({ status: 'failed', reason: error.message });
-    }
-});
-
-// Rollback Phase
-router.post('/an_rollback', async (req, res) => {
-    const { transaction_id } = req.body;
-
-    try {
-        const transaction = transactionCache[transaction_id];
-        if (!transaction) {
-            return res.status(400).json({ status: 'failed', reason: 'Transaction not found' });
-        }
-
-        // Rollback any changes 
-        delete transactionCache[transaction_id];
-        res.status(200).json({ status: 'rolled back' });
-    } catch (error) {
-        res.status(500).json({ status: 'failed', reason: error.message });
-    }
-});
-
-// Endpoint pentru a genera o eroare 500 pentru testare
-router.get('/post_test', (req, res) => {
-    // Simulăm o eroare internă (500)
-    res.status(500).json({ error: 'Internal Server Error', message: 'This is a test error for /post_test' });
 });
 
 module.exports = { router, initAnimalPostsClient };
