@@ -1,12 +1,10 @@
-# animal_posts_service/Dockerfile
 FROM python:3.10-slim
 
 # Set the working directory
 WORKDIR /app
 
-# Copy the requirements file if it exists
+# Copy the requirements file to the container
 COPY requirements.txt ./
-# If you don't have a requirements file, add dependencies in the next step.
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
