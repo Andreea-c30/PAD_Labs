@@ -345,69 +345,105 @@ def add_message():
 @app.route('/prepare', methods=['POST'])
 def prepare_transaction():
     try:
-        data = request.json
-        username = data['username']
-        room = data['room']
-        message = data['message']
+        print("=== /prepare: Transaction Started ===")
+        data = request.json  # Ensure the request contains JSON
+        if not data:
+            print("=== /prepare: Missing request payload ===")
+            return {"status": "not ready", "reason": "Missing request payload"}, 400
 
-        # Log the incoming request
-        print(f"Prepare request received: {data}")
+        username = data.get('username')
+        room = data.get('room')
+        if not username or not room:
+            print(f"=== /prepare: Missing required fields. Data: {data} ===")
+            return {"status": "not ready", "reason": "Missing 'username' or 'room'"}, 400
 
-        # Validate the room exists
-        if not messages_collection.find_one({"room": room}):
-            return {"status": "not ready", "reason": "Room does not exist"}, 400
+        # Log the incoming request for debugging
+        print(f"=== /prepare: Prepare request received. Data: {data} ===")
 
-        # Lock the room
-        redis_client.set(f"lock:room:{room}", "locked")
-        return {"status": "ready"}, 200
+        # Attempt to lock the room in Redis
+        lock_key = f"lock:room:{room}"
+        print(f"=== /prepare: Attempting to lock room: {lock_key} ===")
+        lock_result = redis_client.set(lock_key, "locked", nx=True, ex=60)  # Lock expires in 60 seconds
+        if lock_result:
+            print(f"=== /prepare: Room locked successfully: {lock_key} ===")
+            return {"status": "ready"}, 200
+        else:
+            print(f"=== /prepare: Room is already locked by another transaction: {lock_key} ===")
+            return {"status": "not ready", "reason": "Room is already locked by another transaction"}, 409
+
     except Exception as e:
-        print(f"Error in prepare: {e}")
+        print(f"=== /prepare: Error in prepare_transaction: {e} ===")
         return {"status": "not ready", "reason": str(e)}, 500
 
 
 @app.route('/commit', methods=['POST'])
 def commit_transaction():
     try:
+        print("=== /commit: Transaction Started ===")
         data = request.json
-        username = data['username']
-        room = data['room']
-        message = data['message']
+        if not data:
+            print("=== /commit: Missing request payload ===")
+            return {"status": "failed", "reason": "Missing request payload"}, 400
 
-        # Save the message
+        # Validate required fields
+        username = data.get('username')
+        room = data.get('room')
+        message = data.get('message')
+        if not username:
+            print(f"=== /commit: Missing required fields. Data: {data} ===")
+            return {"status": "failed", "reason": "Missing 'username', 'room', or 'message'"}, 400
+
+        # Log incoming data for debugging
+        print(f"=== /commit: Commit request received. Data: {data} ===")
+
+        # Save the message to the database
         message_record = {
             "username": username,
             "message": message,
             "room": room,
             "timestamp": datetime.datetime.utcnow()
         }
-        messages_collection.insert_one(message_record)
+        print(f"=== /commit: Saving message to database. Record: {message_record} ===")
+        result = messages_collection.insert_one(message_record)
+        print(f"=== /commit: Message saved to database with ID: {result.inserted_id} ===")
 
-        # Release lock
-        redis_client.delete(f"lock:room:{room}")
+        # Release the lock in Redis
+        lock_key = f"lock:room:{room}"
+        print(f"=== /commit: Releasing lock for room: {lock_key} ===")
+        redis_client.delete(lock_key)
+        print(f"=== /commit: Lock released for room: {lock_key} ===")
+
         return {"status": "committed"}, 200
     except Exception as e:
+        print(f"=== /commit: Error in commit_transaction: {e} ===")
         return {"status": "failed", "reason": str(e)}, 500
-
 
 @app.route('/rollback', methods=['POST'])
 def rollback_transaction():
     try:
+        print("=== /rollback: Transaction Started ===")
         data = request.json
+        if not data:
+            print("=== /rollback: Missing request payload ===")
+            return {"status": "failed", "reason": "Missing request payload"}, 400
+
         room = data.get('room')
         if not room:
+            print(f"=== /rollback: Missing 'room' parameter. Data: {data} ===")
             return {"status": "failed", "reason": "Missing 'room' parameter"}, 400
 
-        print(f"Rollback request received for room: {room}")
+        print(f"=== /rollback: Rollback request received for room: {room} ===")
 
-        # Release lock
-        redis_client.delete(f"lock:room:{room}")
-        print(f"Lock released for room: {room}")
+        # Release the lock in Redis
+        lock_key = f"lock:room:{room}"
+        print(f"=== /rollback: Releasing lock for room: {lock_key} ===")
+        redis_client.delete(lock_key)
+        print(f"=== /rollback: Lock released for room: {lock_key} ===")
 
         return {"status": "rolled back"}, 200
     except Exception as e:
-        print(f"Error in rollback: {e}")
+        print(f"=== /rollback: Error in rollback_transaction: {e} ===")
         return {"status": "failed", "reason": str(e)}, 500
-
 
 def start_websocket_server():
     loop = asyncio.new_event_loop()
