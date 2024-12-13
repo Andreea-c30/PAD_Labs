@@ -66,8 +66,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 "title": request.title,
                 "description": request.description,
                 "location": request.location,
-                "status": request.status,
-                "images": request.images
+                "status": request.status
             }
 
             with app.app_context():
@@ -96,8 +95,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                     "title": request.title,
                     "description": request.description,
                     "location": request.location,
-                    "status": request.status,
-                    "images": request.images
+                    "status": request.status
                 }
                 db.session.execute(animal_posts.update().where(animal_posts.c.id == request.postId).values(updated_post))
                 db.session.commit()
@@ -124,8 +122,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                     title=post.title,
                     description=post.description,
                     location=post.location,
-                    status=post.status,
-                    images=post.images
+                    status=post.status
                 )
                 animals.append(animal)
                 animals_data.append(dict(
@@ -133,8 +130,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                     title=post.title,
                     description=post.description,
                     location=post.location,
-                    status=post.status,
-                    images=post.images
+                    status=post.status
                 ))
 
             redis_client.set("animals", json.dumps(animals_data))
@@ -295,7 +291,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 return animal_posts_pb2.TransactionResponse(
                     transaction_id=request.transaction_id,
                     success=False,
-                    message="Transaction not in prepared state."
+                    message="Transaction not in prepared state or already committed."
                 )
 
             payload = transaction["payload"]
@@ -319,6 +315,7 @@ class AnimalService(animal_posts_pb2_grpc.AnimalPostServiceServicer):
                 success=False,
                 message=f"Rollback phase failed: {str(e)}"
             )
+
 
 # start the gRPC server
 def start_grpc_server():
